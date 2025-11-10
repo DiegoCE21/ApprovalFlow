@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Limpiar Base de Datos - Flujo Aprobaciones</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #d32f2f;
+            margin-bottom: 20px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #d32f2f;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #b71c1c;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ Limpiar Base de Datos</h1>
+        
+        <div class="warning">
+            <strong>ADVERTENCIA:</strong> Esta acción eliminará TODOS los documentos, aprobadores, firmas y registros de auditoría de la base de datos. 
+            <br><br>
+            También eliminará los archivos PDF físicos del servidor.
+            <br><br>
+            <strong>Esta acción NO se puede deshacer.</strong>
+        </div>
+
+        <div class="info">
+            <strong>Nota:</strong> Debes estar autenticado en el sistema para poder ejecutar esta acción.
+            Si no has iniciado sesión, abre primero el sistema en otra pestaña: 
+            <a href="http://localhost:3300" target="_blank">http://localhost:3300</a>
+        </div>
+
+        <button id="limpiarBtn" onclick="limpiarBaseDatos()">
+            Limpiar Base de Datos
+        </button>
+
+        <div id="resultado"></div>
+    </div>
+
+    <script>
+        async function limpiarBaseDatos() {
+            const btn = document.getElementById('limpiarBtn');
+            const resultado = document.getElementById('resultado');
+            
+            if (!confirm('¿Estás SEGURO que deseas eliminar TODOS los datos? Esta acción no se puede deshacer.')) {
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Limpiando...';
+            resultado.innerHTML = '';
+
+            try {
+                const response = await fetch('http://localhost:3000/api/documentos/debug/limpiar', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultado.innerHTML = `
+                        <div class="result success">
+                            <strong>✓ Éxito</strong><br>
+                            ${data.message}<br>
+                            Archivos eliminados: ${data.archivosEliminados || 0}
+                        </div>
+                    `;
+                } else {
+                    throw new Error(data.message || 'Error desconocido');
+                }
+            } catch (error) {
+                resultado.innerHTML = `
+                    <div class="result error">
+                        <strong>✗ Error</strong><br>
+                        ${error.message}<br><br>
+                        <small>Si aparece un error de autenticación, asegúrate de haber iniciado sesión en el sistema primero.</small>
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Limpiar Base de Datos';
+            }
+        }
+    </script>
+</body>
+</html>
