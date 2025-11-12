@@ -795,39 +795,40 @@ export async function subirNuevaVersion(req, res) {
         ]
       );
 
-      // Verificar si este aprobador ya aprobó en la versión anterior
-      const yaAprobo = aprobadoresAnteriores.rows.find(
-        (a) => a.usuario_id === usuarioId && a.estado === 'aprobado'
+      // Enviar correo de notificación de nueva versión a TODOS los aprobadores
+      await enviarNotificacionNuevaVersion(
+        usuarioCorreo,
+        usuarioNombre,
+        req.file.originalname,
+        tokenFirma,
+        nuevoDocumento.version
       );
 
-      // Solo enviar correo si no aprobó en la versión anterior
-      if (!yaAprobo) {
-        await enviarNotificacionNuevaVersion(
-          usuarioCorreo,
+      // Registrar envío de correo en auditoría
+      await client.query(
+        `INSERT INTO log_auditoria (
+          documento_id, usuario_id, usuario_nombre, usuario_correo,
+          accion, descripcion, ip_address
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          nuevoDocumento.id,
+          usuarioId,
           usuarioNombre,
-          req.file.originalname,
-          tokenFirma,
-          nuevoDocumento.version
-        );
-
-        // Registrar envío de correo en auditoría
-        await client.query(
-          `INSERT INTO log_auditoria (
-            documento_id, usuario_id, usuario_nombre, usuario_correo,
-            accion, descripcion, ip_address
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            nuevoDocumento.id,
-            usuarioId,
-            usuarioNombre,
-            usuarioCorreo,
-            'notificacion',
-            `Correo de nueva versión enviado a ${usuarioNombre}`,
-            req.ip
-          ]
-        );
-      }
+          usuarioCorreo,
+          'notificacion',
+          `Correo de nueva versión enviado a ${usuarioNombre}`,
+          req.ip
+        ]
+      );
     }
+
+    // Actualizar último recordatorio para evitar que el job de recordatorios envíe correos inmediatamente
+    await client.query(
+      `UPDATE documentos 
+       SET ultimo_recordatorio_enviado = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [nuevoDocumento.id]
+    );
 
     // Registrar subida de nueva versión en auditoría
     await client.query(

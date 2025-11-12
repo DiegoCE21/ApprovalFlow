@@ -315,23 +315,25 @@ export async function rechazarDocumento(req, res) {
       ]
     );
 
-    // Obtener participantes para notificar
+    // Obtener participantes para notificar (usando DISTINCT para evitar duplicados)
     const participantesResult = await client.query(
-      `SELECT usuario_correo, usuario_nombre
+      `SELECT DISTINCT usuario_correo, usuario_nombre
        FROM aprobadores
-       WHERE documento_id = $1`,
+       WHERE documento_id = $1 AND usuario_correo IS NOT NULL`,
       [aprobador.documento_id]
     );
 
     const destinatarios = new Map();
 
+    // Agregar todos los participantes (aprobadores)
     participantesResult.rows.forEach(participante => {
       if (participante.usuario_correo) {
         destinatarios.set(participante.usuario_correo, participante.usuario_nombre || participante.usuario_correo);
       }
     });
 
-    if (aprobador.usuario_creador_correo) {
+    // Agregar el creador del documento si tiene correo y no está ya en la lista
+    if (aprobador.usuario_creador_correo && !destinatarios.has(aprobador.usuario_creador_correo)) {
       destinatarios.set(
         aprobador.usuario_creador_correo,
         aprobador.usuario_creador_nombre || aprobador.usuario_creador_correo
