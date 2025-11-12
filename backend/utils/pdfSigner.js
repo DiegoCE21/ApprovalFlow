@@ -37,6 +37,7 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
     
     // Función para dividir texto en líneas que quepan en el ancho disponible
     // Las palabras nunca se cortan, siempre se pasan completas a la siguiente línea
+    // Si una palabra es muy larga, se divide en caracteres para que quepa
     const dividirEnLineas = (texto, anchoMaximo, tamanoFuente) => {
       const palabras = texto.split(' ');
       const lineas = [];
@@ -44,18 +45,39 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
       
       for (const palabra of palabras) {
         // Verificar si la palabra sola cabe en el ancho disponible
-        const anchoPalabra = font.widthOfTextAtSize(palabra, tamanoFuente);
+        let anchoPalabra = font.widthOfTextAtSize(palabra, tamanoFuente);
         
-        // Si la palabra sola no cabe, debemos reducir el tamaño de fuente o forzarla
-        // Por ahora, la ponemos en su propia línea aunque sea muy larga
+        // Si la palabra sola no cabe, dividirla en caracteres
         if (anchoPalabra > anchoMaximo) {
           // Si ya hay contenido en la línea actual, guardarlo
           if (lineaActual) {
             lineas.push(lineaActual);
             lineaActual = '';
           }
-          // La palabra muy larga va en su propia línea
-          lineas.push(palabra);
+          
+          // Dividir la palabra en caracteres para que quepa
+          let palabraRestante = palabra;
+          while (palabraRestante.length > 0) {
+            let caracteresEnLinea = '';
+            for (let i = 0; i < palabraRestante.length; i++) {
+              const prueba = caracteresEnLinea + palabraRestante[i];
+              const anchoPrueba = font.widthOfTextAtSize(prueba, tamanoFuente);
+              if (anchoPrueba <= anchoMaximo) {
+                caracteresEnLinea = prueba;
+              } else {
+                break;
+              }
+            }
+            
+            if (caracteresEnLinea.length > 0) {
+              lineas.push(caracteresEnLinea);
+              palabraRestante = palabraRestante.substring(caracteresEnLinea.length);
+            } else {
+              // Si ni un solo carácter cabe, forzar al menos uno
+              lineas.push(palabraRestante[0]);
+              palabraRestante = palabraRestante.substring(1);
+            }
+          }
           continue;
         }
         
@@ -92,80 +114,133 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
     let lineas = [];
     let alturaTotal = 0;
     let intentos = 0;
-    const minFontSize = 8;
-    
-    // Primero, verificar que todas las palabras individuales quepan en el ancho
-    // Si alguna palabra es muy larga, reducir el tamaño de fuente hasta que quepa
-    const palabras = usuarioNombreMayusculas.split(' ');
-    for (const palabra of palabras) {
-      let tamanoPalabra = fontSize;
-      while (font.widthOfTextAtSize(palabra, tamanoPalabra) > anchoDisponible && tamanoPalabra > minFontSize) {
-        tamanoPalabra -= 0.5;
-      }
-      if (tamanoPalabra < fontSize) {
-        fontSize = tamanoPalabra;
-        espacioEntreLineas = fontSize * 1.2;
-      }
-    }
+    const minFontSize = 6; // Tamaño mínimo más pequeño para nombres muy largos
     
     // Iterar hasta encontrar un tamaño que quepa tanto en ancho como en alto
-    while (intentos < 50 && fontSize >= minFontSize) {
+    while (intentos < 100 && fontSize >= minFontSize) {
       lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
-      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
       
-      // Verificar que todas las líneas quepan en el ancho
-      let todasCaben = true;
+      // Verificar que todas las líneas quepan en el ancho (con un pequeño margen de error)
+      let todasCabenEnAncho = true;
       for (const linea of lineas) {
-        if (font.widthOfTextAtSize(linea, fontSize) > anchoDisponible) {
-          todasCaben = false;
+        const anchoLinea = font.widthOfTextAtSize(linea, fontSize);
+        if (anchoLinea > anchoDisponible * 1.01) { // 1% de tolerancia
+          todasCabenEnAncho = false;
           break;
         }
       }
       
+      // Calcular altura total necesaria
+      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+      
       // Si todas las líneas caben en ancho y alto, usar este tamaño
-      if (todasCaben && alturaTotal <= altoDisponible) {
+      if (todasCabenEnAncho && alturaTotal <= altoDisponible) {
         break;
       }
       
       // Reducir tamaño de fuente y recalcular
-      fontSize -= 0.5;
+      fontSize -= 0.3;
       espacioEntreLineas = fontSize * 1.2;
       intentos++;
     }
     
-    // Si aún no cabe en alto, forzar a que quepa reduciendo más el tamaño
+    // Si aún no cabe en alto después de todos los intentos, forzar a que quepa
     if (alturaTotal > altoDisponible && fontSize > minFontSize) {
-      fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
-      espacioEntreLineas = fontSize * 1.2;
-      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
-      // Recalcular líneas con el nuevo tamaño
-      lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
+      // Calcular el tamaño máximo que cabe en el alto disponible
+      const maxLineas = Math.max(1, Math.floor(altoDisponible / (fontSize * 1.2)));
+      if (lineas.length > maxLineas) {
+        // Si hay demasiadas líneas, reducir más el tamaño
+        fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
+        espacioEntreLineas = fontSize * 1.2;
+        // Recalcular líneas con el nuevo tamaño
+        lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
+      }
       // Recalcular altura total con las nuevas líneas
       alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+      
+      // Asegurar que no exceda el alto disponible
+      if (alturaTotal > altoDisponible) {
+        fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
+        espacioEntreLineas = fontSize * 1.2;
+        alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+      }
     }
     
     // Asegurar que tenemos líneas y un tamaño de fuente válido
     if (!lineas || lineas.length === 0 || fontSize < minFontSize) {
       console.error('Error: No se pudieron generar líneas válidas o el tamaño de fuente es muy pequeño');
       lineas = [usuarioNombreMayusculas];
-      fontSize = Math.max(8, Math.min(alto * 0.2, ancho / usuarioNombreMayusculas.length * 1.5));
+      fontSize = Math.max(minFontSize, Math.min(alto * 0.2, ancho / usuarioNombreMayusculas.length * 1.5));
       alturaTotal = fontSize;
+      espacioEntreLineas = fontSize * 1.2;
+    }
+    
+    // Asegurar que el texto no se salga del área delimitada
+    // Verificar una última vez que todas las líneas quepan
+    const lineasFinales = [];
+    for (const linea of lineas) {
+      const anchoLinea = font.widthOfTextAtSize(linea, fontSize);
+      if (anchoLinea <= anchoDisponible) {
+        lineasFinales.push(linea);
+      } else {
+        // Si aún no cabe, dividir en caracteres
+        let textoRestante = linea;
+        while (textoRestante.length > 0) {
+          let caracteresEnLinea = '';
+          for (let i = 0; i < textoRestante.length; i++) {
+            const prueba = caracteresEnLinea + textoRestante[i];
+            const anchoPrueba = font.widthOfTextAtSize(prueba, fontSize);
+            if (anchoPrueba <= anchoDisponible) {
+              caracteresEnLinea = prueba;
+            } else {
+              break;
+            }
+          }
+          if (caracteresEnLinea.length > 0) {
+            lineasFinales.push(caracteresEnLinea);
+            textoRestante = textoRestante.substring(caracteresEnLinea.length);
+          } else {
+            lineasFinales.push(textoRestante[0] || '');
+            textoRestante = textoRestante.substring(1);
+          }
+        }
+      }
+    }
+    lineas = lineasFinales;
+    
+    // Recalcular altura total con las líneas finales
+    alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+    
+    // Asegurar que la altura total no exceda el alto disponible
+    if (alturaTotal > altoDisponible) {
+      fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
+      espacioEntreLineas = fontSize * 1.2;
+      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
     }
     
     // Calcular posición centrada verticalmente
     // Y en PDF es desde abajo, así que calculamos desde la parte inferior del recuadro
     const espacioVerticalRestante = alto - alturaTotal;
-    const margenSuperior = espacioVerticalRestante / 2;
+    const margenSuperior = Math.max(0, espacioVerticalRestante / 2);
     const textYInicial = y + alto - margenSuperior - fontSize; // Posición de la primera línea desde abajo
+    
+    // Asegurar que el texto no se salga por arriba o abajo
+    const textYMinimo = y; // Límite inferior
+    const textYMaximo = y + alto - fontSize; // Límite superior
     
     // Dibujar cada línea centrada horizontalmente
     lineas.forEach((linea, index) => {
       if (!linea || linea.trim() === '') return; // Saltar líneas vacías
       
       const textWidth = font.widthOfTextAtSize(linea, fontSize);
-      const textX = x + (ancho - textWidth) / 2;
+      // Asegurar que el texto no se salga horizontalmente
+      const textX = Math.max(x, Math.min(x + ancho - textWidth, x + (ancho - textWidth) / 2));
+      
       // Para cada línea subsiguiente, subimos espacioEntreLineas
-      const textY = textYInicial - (index * espacioEntreLineas);
+      let textY = textYInicial - (index * espacioEntreLineas);
+      
+      // Asegurar que el texto no se salga verticalmente
+      textY = Math.max(textYMinimo, Math.min(textYMaximo, textY));
       
       page.drawText(linea, {
         x: textX,
