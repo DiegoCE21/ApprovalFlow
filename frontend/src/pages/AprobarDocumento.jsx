@@ -60,8 +60,8 @@ const AprobarDocumento = () => {
         }
       }
 
-      // Construir URL del PDF
-      const pdfResponse = await api.get(`/documentos/descargar/${doc.id}`, {
+      // Construir URL del PDF usando el token (no requiere autenticación)
+      const pdfResponse = await api.get(`/documentos/descargar-token/${token}`, {
         responseType: 'blob'
       });
       const pdfBlob = new Blob([pdfResponse.data], { type: 'application/pdf' });
@@ -70,7 +70,16 @@ const AprobarDocumento = () => {
 
       setLoading(false);
     } catch (error) {
-      toast.error('Error al cargar el documento');
+      const errorMessage = error.response?.data?.message || 'Error al cargar el documento';
+      toast.error(errorMessage);
+      
+      // Si el error es de permisos, redirigir al dashboard después de 3 segundos
+      if (error.response?.status === 403) {
+        setTimeout(() => {
+          navigate('/dashboard');
+        }, 3000);
+      }
+      
       console.error(error);
       setLoading(false);
     }

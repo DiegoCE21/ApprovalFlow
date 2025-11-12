@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, TextField, Button, Typography, Container, Paper, Alert } from '@mui/material';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
@@ -10,6 +10,7 @@ const Login = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,7 +26,10 @@ const Login = () => {
       if (response.data.success) {
         toast.success('¡Bienvenido!');
         localStorage.setItem('user', JSON.stringify(response.data.user));
-        navigate('/dashboard');
+        
+        // Redirigir a la URL de aprobación si existe, sino al dashboard
+        const redirectPath = searchParams.get('redirect');
+        navigate(redirectPath || '/dashboard');
       }
     } catch (err) {
       const mensaje = err.response?.data?.message || 'Error al iniciar sesión';

@@ -136,7 +136,7 @@ export async function subirDocumento(req, res) {
         aprobador.nombre,
         req.file.originalname,
         tokenFirma,
-        req.user.nombre
+        documento.usuario_creador_nombre
       );
 
       // Registrar envío de correo en auditoría
@@ -463,6 +463,62 @@ export async function descargarDocumento(req, res) {
 
   } catch (error) {
     console.error('Error al descargar documento:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al descargar el documento'
+    });
+  }
+}
+
+/**
+ * Descargar PDF usando token del documento
+ */
+export async function descargarDocumentoPorToken(req, res) {
+  try {
+    const { token } = req.params;
+
+    // Obtener documento y aprobador por token
+    const result = await pool.query(
+      `SELECT d.*, a.id as aprobador_id
+       FROM documentos d
+       INNER JOIN aprobadores a ON d.id = a.documento_id
+       WHERE a.token_firma = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Token inválido o documento no encontrado'
+      });
+    }
+
+    const documento = result.rows[0];
+
+    // Registrar descarga en auditoría (si hay información del usuario)
+    if (req.user && req.user.id) {
+      await pool.query(
+        `INSERT INTO log_auditoria (
+          documento_id, usuario_id, usuario_nombre, usuario_correo,
+          accion, descripcion, ip_address
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          documento.id,
+          req.user.id,
+          req.user.nombre,
+          req.user.correo,
+          'descarga',
+          `Documento descargado por ${req.user.nombre} (token)`,
+          req.ip
+        ]
+      );
+    }
+
+    // Enviar el archivo
+    res.download(documento.ruta_archivo, documento.nombre_archivo);
+
+  } catch (error) {
+    console.error('Error al descargar documento por token:', error);
     return res.status(500).json({
       success: false,
       message: 'Error al descargar el documento'

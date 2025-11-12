@@ -45,12 +45,17 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     // Solo redirigir al login si es un error de autenticación Y no es una ruta pública
-    const publicRoutes = ['/firmas/firmar', '/firmas/rechazar', '/documentos/token/', '/documentos/descargar/'];
-    const isPublicRoute = publicRoutes.some(route => error.config?.url?.includes(route));
-    
-    if ((error.response?.status === 401 || error.response?.status === 403) && !isPublicRoute) {
-      // Token expirado o inválido - redirigir al login
-      window.location.href = '/login';
+    // Ya no hay rutas públicas - todas requieren autenticación
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      // Si estamos en la página de aprobar, guardar el token para redirigir después del login
+      const currentPath = window.location.pathname;
+      if (currentPath.startsWith('/aprobar/')) {
+        const token = currentPath.replace('/aprobar/', '');
+        window.location.href = `/login?redirect=/aprobar/${token}`;
+      } else {
+        // Token expirado o inválido - redirigir al login
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

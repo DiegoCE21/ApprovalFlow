@@ -5,6 +5,7 @@ import {
   obtenerDocumentosPendientes,
   obtenerDocumentoPorToken,
   descargarDocumento,
+  descargarDocumentoPorToken,
   obtenerDocumentoPorId,
   obtenerAprobadoresDocumento,
   subirNuevaVersion,
@@ -12,6 +13,7 @@ import {
 } from '../controllers/documentController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { verificarPermisoSubida } from '../middleware/verificarPermisoSubida.js';
+import { verificarAprobador } from '../middleware/verificarAprobador.js';
 import upload from '../config/multer.js';
 
 const router = express.Router();
@@ -28,10 +30,13 @@ router.get('/mis-documentos', authenticateToken, obtenerMisDocumentos);
 // GET /api/documentos/pendientes - Obtener documentos pendientes de aprobar
 router.get('/pendientes', authenticateToken, obtenerDocumentosPendientes);
 
-// GET /api/documentos/token/:token - Obtener documento por token de firma
-router.get('/token/:token', obtenerDocumentoPorToken);
+// GET /api/documentos/token/:token - Obtener documento por token de firma (requiere autenticación y ser el aprobador)
+router.get('/token/:token', authenticateToken, verificarAprobador, obtenerDocumentoPorToken);
 
-// GET /api/documentos/descargar/:id - Descargar PDF
+// GET /api/documentos/descargar-token/:token - Descargar PDF usando token (requiere autenticación y ser el aprobador)
+router.get('/descargar-token/:token', authenticateToken, verificarAprobador, descargarDocumentoPorToken);
+
+// GET /api/documentos/descargar/:id - Descargar PDF (requiere autenticación)
 router.get('/descargar/:id', authenticateToken, descargarDocumento);
 
 // GET /api/documentos/:id - Obtener documento por ID

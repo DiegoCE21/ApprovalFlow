@@ -18,7 +18,15 @@ import theme from './theme/theme';
 // Componente para proteger rutas
 const ProtectedRoute = ({ children }) => {
   const user = localStorage.getItem('user');
-  return user ? children : <Navigate to="/login" />;
+  if (!user) {
+    // Si estamos en la página de aprobar, preservar el token en la redirección
+    const currentPath = window.location.pathname;
+    if (currentPath.startsWith('/aprobar/')) {
+      return <Navigate to={`/login?redirect=${currentPath}`} />;
+    }
+    return <Navigate to="/login" />;
+  }
+  return children;
 };
 
 function App() {
@@ -84,7 +92,14 @@ function App() {
               </ProtectedRoute>
             } 
           />
-          <Route path="/aprobar/:token" element={<AprobarDocumento />} />
+          <Route 
+            path="/aprobar/:token" 
+            element={
+              <ProtectedRoute>
+                <AprobarDocumento />
+              </ProtectedRoute>
+            } 
+          />
           <Route path="/" element={<Navigate to="/dashboard" />} />
         </Routes>
       </Router>
