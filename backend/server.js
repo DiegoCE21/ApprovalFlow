@@ -28,11 +28,44 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3300';
 const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Middlewares
-app.use(cors({
-  origin: FRONTEND_URL,
+// Función para validar origen CORS
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Permitir requests sin origen (Postman, mobile apps, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Extraer el dominio base (sin puerto)
+    const getBaseUrl = (url) => {
+      try {
+        const urlObj = new URL(url);
+        return `${urlObj.protocol}//${urlObj.hostname}`;
+      } catch {
+        return url;
+      }
+    };
+
+    const frontendBase = getBaseUrl(FRONTEND_URL);
+    const originBase = getBaseUrl(origin);
+
+    // Permitir si el origen coincide con el frontend (con o sin puerto)
+    if (origin === FRONTEND_URL || originBase === frontendBase) {
+      return callback(null, true);
+    }
+
+    // En desarrollo, permitir localhost con cualquier puerto
+    if (NODE_ENV === 'development' && origin.includes('localhost')) {
+      return callback(null, true);
+    }
+
+    callback(new Error('No permitido por CORS'));
+  },
   credentials: true
-}));
+};
+
+// Middlewares
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
