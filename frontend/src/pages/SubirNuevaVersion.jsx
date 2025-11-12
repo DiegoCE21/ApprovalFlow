@@ -70,9 +70,12 @@ const SubirNuevaVersion = () => {
     if (mantenerPosiciones === 'false') {
       const aprobadoresData = aprobadoresOriginales.map(a => ({
         id: a.usuario_id,
+        usuarioId: a.usuario_id,
         nombre: a.usuario_nombre,
         correo: a.usuario_correo,
-        rol: a.rol_aprobacion
+        rol: a.rol_aprobacion,
+        correoGrupo: a.correo_grupo ?? null,
+        grupoMiembroId: a.grupo_miembro_id ?? null
       }));
 
       navigate('/definir-posiciones', {

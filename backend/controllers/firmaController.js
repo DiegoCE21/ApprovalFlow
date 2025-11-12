@@ -1,6 +1,6 @@
 import pool from '../config/postgres.js';
 import { insertarFirmaEnPDF, insertarMultiplesFirmasEnPDF } from '../utils/pdfSigner.js';
-import { enviarNotificacionRechazo, enviarNotificacionAprobacionCompleta } from '../utils/mailer.js';
+import { enviarNotificacionRechazo, enviarNotificacionAprobacionCompleta, enviarNotificacionRechazoParticipante } from '../utils/mailer.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -11,16 +11,27 @@ export async function firmarDocumento(req, res) {
   const client = await pool.connect();
   
   try {
+    console.log('[DEBUG] firmarDocumento - Inicio');
+    console.log('[DEBUG] Request body:', JSON.stringify(req.body, null, 2));
+    
     await client.query('BEGIN');
 
-    const { token } = req.body;
+    const { token, grupoMiembroId: grupoMiembroIdRaw } = req.body;
 
     if (!token) {
+      console.log('[DEBUG] Error: Token no proporcionado');
       return res.status(400).json({
         success: false,
         message: 'Token es requerido'
       });
     }
+
+    // Convertir grupoMiembroId a número si se proporciona
+    const grupoMiembroId = grupoMiembroIdRaw !== null && grupoMiembroIdRaw !== undefined 
+      ? Number(grupoMiembroIdRaw) 
+      : null;
+    
+    console.log('[DEBUG] grupoMiembroId procesado:', grupoMiembroId);
 
     // Obtener aprobador y documento por token
     const aprobadorResult = await client.query(
@@ -36,6 +47,7 @@ export async function firmarDocumento(req, res) {
          a.pagina_firma,
          a.ancho_firma,
          a.alto_firma,
+         a.correo_grupo,
          d.nombre_archivo,
          d.ruta_archivo,
          d.usuario_creador_correo,
@@ -56,12 +68,94 @@ export async function firmarDocumento(req, res) {
     }
 
     const aprobador = aprobadorResult.rows[0];
+    
+    console.log('[DEBUG] Aprobador encontrado:', {
+      id: aprobador.aprobador_id,
+      correo_grupo: aprobador.correo_grupo,
+      estado: aprobador.estado
+    });
 
     if (aprobador.estado === 'aprobado') {
+      console.log('[DEBUG] Error: Documento ya aprobado');
       return res.status(400).json({
         success: false,
         message: 'Ya has firmado este documento'
       });
+    }
+
+    // Si es un grupo, se debe proporcionar grupoMiembroId
+    let nombreFirma = aprobador.usuario_nombre;
+    let correoFirma = aprobador.usuario_correo;
+    let usuarioIdFirma = aprobador.usuario_id;
+
+    if (aprobador.correo_grupo) {
+      console.log('[DEBUG] Es un grupo, correo_grupo:', aprobador.correo_grupo);
+      console.log('[DEBUG] grupoMiembroId recibido:', grupoMiembroId);
+      
+      // Si es un grupo, el grupoMiembroId es obligatorio
+      if (!grupoMiembroId) {
+        console.log('[DEBUG] Error: grupoMiembroId no proporcionado para grupo');
+        return res.status(400).json({
+          success: false,
+          message: 'Debe seleccionar la persona que está firmando por el grupo'
+        });
+      }
+
+      console.log('[DEBUG] Buscando miembro del grupo:', {
+        grupoMiembroId,
+        correo_grupo: aprobador.correo_grupo
+      });
+
+      const miembroResult = await client.query(
+        `SELECT 
+           miembro_nombre,
+           miembro_correo,
+           miembro_usuario_id
+         FROM grupo_firmantes
+         WHERE id = $1 AND correo_grupo = $2 AND activo = TRUE`,
+        [grupoMiembroId, aprobador.correo_grupo]
+      );
+
+      console.log('[DEBUG] Resultado de búsqueda de miembro:', miembroResult.rows.length);
+
+      if (miembroResult.rows.length === 0) {
+        console.log('[DEBUG] Error: Miembro del grupo no encontrado');
+        return res.status(400).json({
+          success: false,
+          message: 'Miembro del grupo no encontrado o inactivo'
+        });
+      }
+
+      const miembro = miembroResult.rows[0];
+      console.log('[DEBUG] Miembro encontrado:', {
+        nombre: miembro.miembro_nombre,
+        correo: miembro.miembro_correo,
+        usuario_id: miembro.miembro_usuario_id
+      });
+      
+      nombreFirma = miembro.miembro_nombre;
+      correoFirma = miembro.miembro_correo || aprobador.usuario_correo;
+      usuarioIdFirma = miembro.miembro_usuario_id || aprobador.usuario_id;
+
+      console.log('[DEBUG] Valores para firma:', {
+        nombreFirma,
+        correoFirma,
+        usuarioIdFirma,
+        grupoMiembroId
+      });
+
+      // Actualizar el aprobador con la información del miembro
+      await client.query(
+        `UPDATE aprobadores 
+         SET usuario_nombre = $1, 
+             usuario_correo = $2,
+             usuario_id = $3,
+             grupo_miembro_id = $4
+         WHERE id = $5`,
+        [nombreFirma, correoFirma, usuarioIdFirma, grupoMiembroId, aprobador.aprobador_id]
+      );
+      
+      console.log('[DEBUG] Aprobador actualizado con información del miembro');
     }
 
     // Insertar firma en la tabla (sin firma_base64)
@@ -72,8 +166,8 @@ export async function firmarDocumento(req, res) {
       [
         aprobador.documento_id,
         aprobador.aprobador_id,
-        aprobador.usuario_id,
-        aprobador.usuario_nombre,
+        usuarioIdFirma,
+        nombreFirma,
         req.ip
       ]
     );
@@ -96,7 +190,7 @@ export async function firmarDocumento(req, res) {
         y: aprobador.posicion_y,
         ancho: aprobador.ancho_firma,
         alto: aprobador.alto_firma,
-        usuarioNombre: aprobador.usuario_nombre,
+        usuarioNombre: nombreFirma,
         fechaFirma: new Date()
       }
     );
@@ -112,11 +206,11 @@ export async function firmarDocumento(req, res) {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         aprobador.documento_id,
-        aprobador.usuario_id,
-        aprobador.usuario_nombre,
-        aprobador.usuario_correo,
+        usuarioIdFirma,
+        nombreFirma,
+        correoFirma,
         'firma',
-        `Documento firmado por ${aprobador.usuario_nombre}`,
+        `Documento firmado por ${nombreFirma}`,
         req.ip
       ]
     );
@@ -162,7 +256,8 @@ export async function firmarDocumento(req, res) {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error al firmar documento:', error);
+    console.error('[ERROR] Error al firmar documento:', error);
+    console.error('[ERROR] Stack trace:', error.stack);
     return res.status(500).json({
       success: false,
       message: 'Error al firmar el documento',
@@ -170,6 +265,7 @@ export async function firmarDocumento(req, res) {
     });
   } finally {
     client.release();
+    console.log('[DEBUG] firmarDocumento - Fin');
   }
 }
 
@@ -199,7 +295,9 @@ export async function rechazarDocumento(req, res) {
          a.usuario_id,
          a.usuario_nombre,
          a.usuario_correo,
-         d.nombre_archivo
+         d.nombre_archivo,
+         d.usuario_creador_correo,
+         d.usuario_creador_nombre
        FROM aprobadores a
        INNER JOIN documentos d ON a.documento_id = d.id
        WHERE a.token_firma = $1`,
@@ -214,6 +312,7 @@ export async function rechazarDocumento(req, res) {
     }
 
     const aprobador = aprobadorResult.rows[0];
+    const motivoGlobal = `Rechazado por ${aprobador.usuario_nombre}: ${motivo}`;
 
     // Actualizar estado del aprobador
     await client.query(
@@ -223,10 +322,20 @@ export async function rechazarDocumento(req, res) {
       [motivo, aprobador.aprobador_id]
     );
 
+    // Marcar como rechazados al resto de aprobadores pendientes
+    await client.query(
+      `UPDATE aprobadores
+       SET estado = 'rechazado', fecha_aprobacion = CURRENT_TIMESTAMP, motivo_rechazo = $1
+       WHERE documento_id = $2
+         AND id <> $3
+         AND estado = 'pendiente'`,
+      [motivoGlobal, aprobador.documento_id, aprobador.aprobador_id]
+    );
+
     // Actualizar estado del documento
     await client.query(
       `UPDATE documentos 
-       SET estado = 'rechazado'
+       SET estado = 'rechazado', fecha_finalizacion = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [aprobador.documento_id]
     );
@@ -248,6 +357,45 @@ export async function rechazarDocumento(req, res) {
       ]
     );
 
+    // Obtener participantes para notificar
+    const participantesResult = await client.query(
+      `SELECT usuario_correo, usuario_nombre
+       FROM aprobadores
+       WHERE documento_id = $1`,
+      [aprobador.documento_id]
+    );
+
+    const destinatarios = new Map();
+
+    participantesResult.rows.forEach(participante => {
+      if (participante.usuario_correo) {
+        destinatarios.set(participante.usuario_correo, participante.usuario_nombre || participante.usuario_correo);
+      }
+    });
+
+    if (aprobador.usuario_creador_correo) {
+      destinatarios.set(
+        aprobador.usuario_creador_correo,
+        aprobador.usuario_creador_nombre || aprobador.usuario_creador_correo
+      );
+    }
+
+    const notificacionesParticipantes = [];
+    destinatarios.forEach((nombreDestinatario, correoDestinatario) => {
+      notificacionesParticipantes.push(
+        enviarNotificacionRechazoParticipante(
+          correoDestinatario,
+          nombreDestinatario,
+          aprobador.nombre_archivo,
+          aprobador.usuario_nombre,
+          motivo,
+          aprobador.documento_id
+        )
+      );
+    });
+
+    await Promise.all(notificacionesParticipantes);
+
     // Enviar notificación a Calidad
     await enviarNotificacionRechazo(
       aprobador.nombre_archivo,
@@ -260,7 +408,7 @@ export async function rechazarDocumento(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Documento rechazado. Se ha notificado al departamento de Calidad.'
+      message: 'Documento rechazado y se notificó a los participantes y al departamento de Calidad.'
     });
 
   } catch (error) {

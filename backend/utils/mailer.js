@@ -104,6 +104,51 @@ export async function enviarNotificacionRechazo(nombreDocumento, nombreAprobador
 }
 
 /**
+ * Enviar correo de notificación de rechazo a participantes
+ */
+export async function enviarNotificacionRechazoParticipante(destinatario, nombreDestinatario, nombreDocumento, nombreAprobador, motivoRechazo, documentoId) {
+  if (!destinatario) {
+    return { success: false, error: 'Destinatario no proporcionado' };
+  }
+
+  const enlaceDocumento = `${process.env.FRONTEND_URL}/documentos/${documentoId}`;
+
+  const mailOptions = {
+    from: process.env.EMAIL_FROM,
+    to: destinatario,
+    subject: `Documento rechazado: ${nombreDocumento}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #dc2626;">Documento Rechazado</h2>
+        <p>Hola <strong>${nombreDestinatario}</strong>,</p>
+        <p>El documento <strong>${nombreDocumento}</strong> ha sido rechazado por <strong>${nombreAprobador}</strong>.</p>
+        <div style="background-color: #fef2f2; padding: 15px; border-radius: 8px; border-left: 4px solid #dc2626; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Motivo proporcionado:</strong></p>
+          <p style="margin: 10px 0; padding: 10px; background-color: white; border-radius: 4px;">${motivoRechazo}</p>
+        </div>
+        <p>Puedes revisar los detalles del documento en el siguiente enlace:</p>
+        <a href="${enlaceDocumento}" style="display: inline-block; background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 15px 0;">
+          Ver Documento
+        </a>
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+        <p style="color: #9ca3af; font-size: 12px;">
+          Este es un correo automático generado por el Sistema de Aprobaciones.
+        </p>
+      </div>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`✓ Notificación de rechazo enviada a ${destinatario}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`Error al enviar notificación de rechazo a ${destinatario}:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Enviar correo de notificación de nueva versión
  */
 export async function enviarNotificacionNuevaVersion(destinatario, nombreDestinatario, nombreDocumento, tokenFirma, version) {

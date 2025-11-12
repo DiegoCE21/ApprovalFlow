@@ -89,16 +89,31 @@ export async function subirDocumento(req, res) {
     for (let i = 0; i < aprobadoresArray.length; i++) {
       const aprobador = aprobadoresArray[i];
       const tokenFirma = crypto.randomBytes(32).toString('hex');
+      const correoGrupo = aprobador.correo_grupo || aprobador.correoGrupo || null;
+      const rawUsuarioId = aprobador.usuario_id ?? aprobador.usuarioId ?? aprobador.id;
+      const usuarioId = Number(rawUsuarioId);
+      if (Number.isNaN(usuarioId)) {
+        throw new Error(`ID de usuario inválido para el aprobador "${aprobador.nombre}"`);
+      }
+
+      const rawGrupoMiembroId = aprobador.grupo_miembro_id ?? aprobador.grupoMiembroId ?? null;
+      const grupoMiembroId = rawGrupoMiembroId !== null && rawGrupoMiembroId !== undefined
+        ? Number(rawGrupoMiembroId)
+        : null;
+      if (grupoMiembroId !== null && Number.isNaN(grupoMiembroId)) {
+        throw new Error(`ID de miembro del grupo inválido para el aprobador "${aprobador.nombre}"`);
+      }
 
       await client.query(
         `INSERT INTO aprobadores (
           documento_id, usuario_id, usuario_nombre, usuario_correo,
           rol_aprobacion, orden_aprobacion, token_firma, estado,
-          posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma,
+          correo_grupo, grupo_miembro_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           documento.id,
-          aprobador.id,
+          usuarioId,
           aprobador.nombre,
           aprobador.correo,
           aprobador.rol || 'aprobador',
@@ -109,7 +124,9 @@ export async function subirDocumento(req, res) {
           aprobador.posicion_y || 50,
           aprobador.pagina_firma || -1,
           aprobador.ancho_firma || 150,
-          aprobador.alto_firma || 75
+          aprobador.alto_firma || 75,
+          correoGrupo,
+          grupoMiembroId
         ]
       );
 
@@ -180,17 +197,40 @@ export async function subirDocumento(req, res) {
 }
 
 /**
- * Obtener documentos del usuario actual
+ * Obtener documentos del usuario actual (solo la versión más reciente de cada documento)
  */
 export async function obtenerMisDocumentos(req, res) {
   try {
+    // Obtener solo la versión más reciente de cada documento
+    // Agrupamos por documento_padre_id (si existe) o por id (si es documento raíz)
     const result = await pool.query(
-      `SELECT d.*, 
-        (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id) as total_aprobadores,
-        (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id AND a.estado = 'aprobado') as aprobadores_completados
-       FROM documentos d
-       WHERE d.usuario_creador_id = $1
-       ORDER BY d.fecha_creacion DESC`,
+      `WITH documentos_con_raiz AS (
+        SELECT 
+          d.*,
+          COALESCE(d.documento_padre_id, d.id) as documento_raiz_id,
+          (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id) as total_aprobadores,
+          (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id AND a.estado = 'aprobado') as aprobadores_completados
+        FROM documentos d
+        WHERE d.usuario_creador_id = $1
+      ),
+      versiones_por_raiz AS (
+        SELECT 
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY documento_raiz_id 
+            ORDER BY version DESC, fecha_creacion DESC
+          ) as rn
+        FROM documentos_con_raiz
+      )
+      SELECT 
+        id, nombre_archivo, ruta_archivo, tipo_documento, descripcion, version,
+        documento_padre_id, usuario_creador_id, usuario_creador_nombre, usuario_creador_correo,
+        estado, token_acceso, fecha_creacion, fecha_actualizacion, fecha_finalizacion,
+        tiempo_limite_horas, intervalo_recordatorio_minutos, fecha_limite_aprobacion,
+        total_aprobadores, aprobadores_completados
+      FROM versiones_por_raiz
+      WHERE rn = 1
+      ORDER BY fecha_creacion DESC`,
       [req.user.id]
     );
 
@@ -213,14 +253,51 @@ export async function obtenerMisDocumentos(req, res) {
  */
 export async function obtenerDocumentosPendientes(req, res) {
   try {
+    // Obtener NumeroNomina del usuario si está disponible
+    const numeroNomina = req.user.NumeroNomina || null;
+    const correoUsuario = req.user.correo || null;
+    const usuarioId = req.user.id;
+
     const result = await pool.query(
-      `SELECT d.*, a.id as aprobador_id, a.rol_aprobacion, a.orden_aprobacion, 
+      `SELECT DISTINCT d.*, a.id as aprobador_id, a.rol_aprobacion, a.orden_aprobacion, 
         a.estado as mi_estado, a.token_firma
        FROM documentos d
        INNER JOIN aprobadores a ON d.id = a.documento_id
-       WHERE a.usuario_id = $1 AND a.estado = 'pendiente'
+       WHERE a.estado = 'pendiente'
+         AND (
+           -- Caso normal: el usuario es el aprobador directo
+           a.usuario_id = $1
+           OR
+           -- Caso grupo: el usuario se logueó con el correo del grupo
+           (
+             a.correo_grupo IS NOT NULL
+             AND $2::VARCHAR IS NOT NULL
+             AND LOWER(TRIM(a.correo_grupo)) = LOWER(TRIM($2::VARCHAR))
+           )
+           OR
+           -- Caso grupo: el usuario es miembro activo del grupo (por si se loguea con correo individual)
+           (
+             a.correo_grupo IS NOT NULL
+             AND EXISTS (
+               SELECT 1 
+               FROM grupo_firmantes gf
+               WHERE gf.correo_grupo = a.correo_grupo
+                 AND gf.activo = TRUE
+                 AND (
+                   -- Buscar por correo del miembro (si está configurado y coincide)
+                   ($2::VARCHAR IS NOT NULL AND gf.miembro_correo IS NOT NULL AND LOWER(TRIM(gf.miembro_correo)) = LOWER(TRIM($2::VARCHAR)))
+                   -- Buscar por número de nómina en miembro_usuario_id (puede contener NumeroNomina)
+                   OR ($3::VARCHAR IS NOT NULL AND gf.miembro_usuario_id IS NOT NULL AND TRIM(gf.miembro_usuario_id::VARCHAR) = TRIM($3::VARCHAR))
+                   -- Buscar por número de nómina en miembro_numero_nomina
+                   OR ($3::VARCHAR IS NOT NULL AND gf.miembro_numero_nomina IS NOT NULL AND TRIM(gf.miembro_numero_nomina) = TRIM($3::VARCHAR))
+                   -- Buscar por usuario_id del miembro (si está configurado como ID real de Usuarios)
+                   OR ($1::INTEGER IS NOT NULL AND gf.miembro_usuario_id IS NOT NULL AND gf.miembro_usuario_id::INTEGER = $1::INTEGER)
+                 )
+             )
+           )
+         )
        ORDER BY d.fecha_creacion DESC`,
-      [req.user.id]
+      [usuarioId, correoUsuario || null, numeroNomina || null]
     );
 
     return res.status(200).json({
@@ -305,20 +382,63 @@ export async function descargarDocumento(req, res) {
 
     const documento = result.rows[0];
 
+    // Obtener información del usuario
+    const numeroNomina = req.user.NumeroNomina || null;
+    const correoUsuario = req.user.correo || null;
+    const usuarioId = req.user.id;
+
     // Verificar que el usuario tenga permiso para descargar
-    if (documento.usuario_creador_id !== req.user.id) {
-      // Verificar si es un aprobador
+    let tienePermiso = false;
+
+    // 1. Verificar si es el creador
+    if (documento.usuario_creador_id === usuarioId) {
+      tienePermiso = true;
+    } else {
+      // 2. Verificar si es un aprobador directo o miembro de grupo
       const aprobadorResult = await pool.query(
-        `SELECT * FROM aprobadores WHERE documento_id = $1 AND usuario_id = $2`,
-        [id, req.user.id]
+        `SELECT a.* FROM aprobadores a
+         WHERE a.documento_id = $1 
+         AND (
+           -- Aprobador directo
+           a.usuario_id = $2
+           OR
+           -- Usuario se logueó con el correo del grupo
+           ($3::VARCHAR IS NOT NULL AND a.correo_grupo IS NOT NULL AND LOWER(TRIM(a.correo_grupo)) = LOWER(TRIM($3::VARCHAR)))
+           OR
+           -- Usuario es miembro activo del grupo aprobador
+           (
+             a.correo_grupo IS NOT NULL
+             AND EXISTS (
+               SELECT 1 
+               FROM grupo_firmantes gf
+               WHERE gf.correo_grupo = a.correo_grupo
+                 AND gf.activo = TRUE
+                 AND (
+                   -- Buscar por correo del miembro
+                   ($3::VARCHAR IS NOT NULL AND gf.miembro_correo IS NOT NULL AND LOWER(TRIM(gf.miembro_correo)) = LOWER(TRIM($3::VARCHAR)))
+                   -- Buscar por número de nómina en miembro_usuario_id
+                   OR ($4::VARCHAR IS NOT NULL AND gf.miembro_usuario_id IS NOT NULL AND TRIM(gf.miembro_usuario_id::VARCHAR) = TRIM($4::VARCHAR))
+                   -- Buscar por número de nómina en miembro_numero_nomina
+                   OR ($4::VARCHAR IS NOT NULL AND gf.miembro_numero_nomina IS NOT NULL AND TRIM(gf.miembro_numero_nomina) = TRIM($4::VARCHAR))
+                   -- Buscar por usuario_id del miembro
+                   OR ($2::INTEGER IS NOT NULL AND gf.miembro_usuario_id IS NOT NULL AND gf.miembro_usuario_id::INTEGER = $2::INTEGER)
+                 )
+             )
+           )
+         )`,
+        [id, usuarioId, correoUsuario, numeroNomina]
       );
 
-      if (aprobadorResult.rows.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: 'No tienes permiso para descargar este documento'
-        });
+      if (aprobadorResult.rows.length > 0) {
+        tienePermiso = true;
       }
+    }
+
+    if (!tienePermiso) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para descargar este documento'
+      });
     }
 
     // Registrar descarga en auditoría
@@ -572,22 +692,46 @@ export async function subirNuevaVersion(req, res) {
 
       // Si mantenemos posiciones, usamos los datos del aprobador anterior
       // Si no, usamos los datos enviados desde el frontend
-      const usuario_id = mantenerPosiciones ? aprobador.usuario_id : aprobador.id;
-      const usuario_nombre = mantenerPosiciones ? aprobador.usuario_nombre : aprobador.nombre;
-      const usuario_correo = mantenerPosiciones ? aprobador.usuario_correo : aprobador.correo;
+      const rawUsuarioId = mantenerPosiciones
+        ? aprobador.usuario_id
+        : (aprobador.usuario_id ?? aprobador.usuarioId ?? aprobador.id);
+      const usuarioId = Number(rawUsuarioId);
+
+      if (Number.isNaN(usuarioId)) {
+        throw new Error(`ID de usuario inválido para el aprobador "${aprobador.nombre || aprobador.usuario_nombre}"`);
+      }
+
+      const usuarioNombre = mantenerPosiciones ? aprobador.usuario_nombre : aprobador.nombre;
+      const usuarioCorreo = mantenerPosiciones ? aprobador.usuario_correo : aprobador.correo;
       const rol = mantenerPosiciones ? aprobador.rol_aprobacion : (aprobador.rol || 'aprobador');
+      const correoGrupo = mantenerPosiciones
+        ? aprobador.correo_grupo
+        : (aprobador.correo_grupo || aprobador.correoGrupo || null);
+
+      const rawGrupoMiembroId = mantenerPosiciones
+        ? aprobador.grupo_miembro_id
+        : (aprobador.grupo_miembro_id ?? aprobador.grupoMiembroId ?? null);
+
+      const grupoMiembroId = rawGrupoMiembroId !== null && rawGrupoMiembroId !== undefined
+        ? Number(rawGrupoMiembroId)
+        : null;
+
+      if (grupoMiembroId !== null && Number.isNaN(grupoMiembroId)) {
+        throw new Error(`ID de miembro de grupo inválido para el aprobador "${aprobador.nombre || aprobador.usuario_nombre}"`);
+      }
 
       await client.query(
         `INSERT INTO aprobadores (
           documento_id, usuario_id, usuario_nombre, usuario_correo,
           rol_aprobacion, orden_aprobacion, token_firma, estado,
-          posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma,
+          correo_grupo, grupo_miembro_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           nuevoDocumento.id,
-          usuario_id,
-          usuario_nombre,
-          usuario_correo,
+          usuarioId,
+          usuarioNombre,
+          usuarioCorreo,
           rol,
           i + 1,
           tokenFirma,
@@ -596,20 +740,22 @@ export async function subirNuevaVersion(req, res) {
           aprobador.posicion_y || 50,
           aprobador.pagina_firma || -1,
           aprobador.ancho_firma || 150,
-          aprobador.alto_firma || 75
+          aprobador.alto_firma || 75,
+          correoGrupo,
+          grupoMiembroId
         ]
       );
 
       // Verificar si este aprobador ya aprobó en la versión anterior
       const yaAprobo = aprobadoresAnteriores.rows.find(
-        a => a.usuario_id === usuario_id && a.estado === 'aprobado'
+        (a) => a.usuario_id === usuarioId && a.estado === 'aprobado'
       );
 
       // Solo enviar correo si no aprobó en la versión anterior
       if (!yaAprobo) {
         await enviarNotificacionNuevaVersion(
-          usuario_correo,
-          usuario_nombre,
+          usuarioCorreo,
+          usuarioNombre,
           req.file.originalname,
           tokenFirma,
           nuevoDocumento.version
@@ -623,11 +769,11 @@ export async function subirNuevaVersion(req, res) {
           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
             nuevoDocumento.id,
-            usuario_id,
-            usuario_nombre,
-            usuario_correo,
+            usuarioId,
+            usuarioNombre,
+            usuarioCorreo,
             'notificacion',
-            `Correo de nueva versión enviado a ${usuario_nombre}`,
+            `Correo de nueva versión enviado a ${usuarioNombre}`,
             req.ip
           ]
         );

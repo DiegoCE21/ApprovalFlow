@@ -12,6 +12,7 @@ import VerDocumento from './pages/VerDocumento';
 import DefinirPosicionesFirmas from './pages/DefinirPosicionesFirmas';
 import SubirNuevaVersion from './pages/SubirNuevaVersion';
 import GestionPermisos from './pages/GestionPermisos';
+import GestionGruposFirmantes from './pages/GestionGruposFirmantes';
 import theme from './theme/theme';
 
 // Componente para proteger rutas
@@ -72,6 +73,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <GestionPermisos />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/gestion-grupos" 
+            element={
+              <ProtectedRoute>
+                <GestionGruposFirmantes />
               </ProtectedRoute>
             } 
           />

@@ -8,7 +8,7 @@ import {
 import { 
   Add, Description, PendingActions, Logout, CloudUpload, 
   CheckCircle, Schedule, Cancel, Assignment, AdminPanelSettings, Search,
-  FilterList
+  FilterList, People
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
@@ -153,18 +153,32 @@ const Dashboard = () => {
               <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' }, display: 'flex', gap: 2, justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
                 {/* Botón de Gestión de Permisos (solo para Diego) */}
                 {user?.correo === 'diego.castillo@fastprobags.com' && (
-                  <Button
-                    variant="outlined"
-                    size="large"
-                    startIcon={<AdminPanelSettings />}
-                    onClick={() => navigate('/gestion-permisos')}
-                    sx={{ 
-                      px: 3,
-                      py: 1.5
-                    }}
-                  >
-                    Permisos
-                  </Button>
+                  <>
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      startIcon={<AdminPanelSettings />}
+                      onClick={() => navigate('/gestion-permisos')}
+                      sx={{ 
+                        px: 3,
+                        py: 1.5
+                      }}
+                    >
+                      Permisos
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      startIcon={<People />}
+                      onClick={() => navigate('/gestion-grupos')}
+                      sx={{ 
+                        px: 3,
+                        py: 1.5
+                      }}
+                    >
+                      Grupos
+                    </Button>
+                  </>
                 )}
                 
                 {/* Botón de Subir Documento (solo para usuarios con permiso) */}

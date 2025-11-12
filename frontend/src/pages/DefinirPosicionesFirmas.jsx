@@ -198,9 +198,12 @@ const DefinirPosicionesFirmas = () => {
       // Agregar aprobadores con sus posiciones
       const aprobadoresData = aprobadoresConPosicion.map(a => ({
         id: a.id,
+        usuarioId: a.usuarioId ?? a.id,
         nombre: a.nombre,
         correo: a.correo,
         rol: a.rol || 'aprobador',
+        correoGrupo: a.correoGrupo ?? a.correo_grupo ?? null,
+        grupoMiembroId: a.grupoMiembroId ?? a.grupo_miembro_id ?? null,
         posicion_x: a.posicion.x,
         posicion_y: a.posicion.y,
         pagina_firma: a.posicion.pagina,

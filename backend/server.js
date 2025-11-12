@@ -7,17 +7,30 @@ import documentRoutes from './routes/documentRoutes.js';
 import firmaRoutes from './routes/firmaRoutes.js';
 import usuarioRoutes from './routes/usuarioRoutes.js';
 import permisosRoutes from './routes/permisosRoutes.js';
+import grupoRoutes from './routes/grupoRoutes.js';
 import { iniciarJobRecordatorios } from './jobs/recordatorios.js';
 import { iniciarJobVencimientos } from './jobs/vencimientos.js';
+import { ensureSchemaUpdates } from './utils/schemaUpdates.js';
 
 dotenv.config();
 
+// Validar variables de entorno críticas
+if (!process.env.JWT_SECRET) {
+  console.error('❌ Error: JWT_SECRET no está configurado en el archivo .env');
+  console.error('   Por favor, agrega JWT_SECRET a tu archivo backend/.env');
+  console.error('   Puedes generar uno con: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+  process.exit(1);
+}
+
 const app = express();
 const PORT = process.env.PORT || 3301;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3300';
+const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Middlewares
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3300',
+  origin: FRONTEND_URL,
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
@@ -30,6 +43,7 @@ app.use('/api/documentos', documentRoutes);
 app.use('/api/firmas', firmaRoutes);
 app.use('/api/usuarios', usuarioRoutes);
 app.use('/api/permisos', permisosRoutes);
+app.use('/api/grupos', grupoRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
@@ -46,23 +60,38 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     success: false,
     message: 'Error interno del servidor',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    error: NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`
+async function startServer() {
+  try {
+    await ensureSchemaUpdates();
+
+    app.listen(PORT, '0.0.0.0', () => {
+      const modo = NODE_ENV.toUpperCase();
+      const backendUrl = BACKEND_URL.length > 43 ? BACKEND_URL.substring(0, 40) + '...' : BACKEND_URL;
+      const frontendUrl = FRONTEND_URL.length > 43 ? FRONTEND_URL.substring(0, 40) + '...' : FRONTEND_URL;
+      
+      console.log(`
 ╬═══════════════════════════════════════════════════════╗
 ║   Sistema de Aprobaciones y Firmas Digitales         ║
-║   Servidor corriendo en puerto ${PORT}                   ║
-║   URL: http://localhost:${PORT}                       ║
+║   Modo: ${modo.padEnd(47)}║
+║   Puerto: ${PORT.toString().padEnd(45)}║
+║   URL: ${backendUrl.padEnd(47)}║
+║   Frontend: ${frontendUrl.padEnd(44)}║
 ╚═══════════════════════════════════════════════════════╝
-  `);
-  
-  // Iniciar jobs programados
-  iniciarJobRecordatorios();
-  iniciarJobVencimientos();
-});
+      `);
+
+      iniciarJobRecordatorios();
+      iniciarJobVencimientos();
+    });
+  } catch (error) {
+    console.error('No se pudo iniciar el servidor:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 export default app;

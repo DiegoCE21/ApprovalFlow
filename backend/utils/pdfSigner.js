@@ -30,32 +30,150 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
     const pageIndex = pagina === -1 ? pdfDoc.getPageCount() - 1 : pagina - 1;
     const page = pdfDoc.getPage(pageIndex);
 
-    // Calcular tamaño de fuente dinámico basado en el espacio disponible
-    // Comenzamos con un tamaño base y lo ajustamos si es necesario
-    let fontSize = Math.min(alto * 0.35, 24); // Máximo 24pt
+    // Convertir el nombre a mayúsculas
+    const usuarioNombreMayusculas = usuarioNombre.toUpperCase();
+    
     const font = await pdfDoc.embedFont('Helvetica-Bold');
     
-    // Medir el ancho del texto con el tamaño actual
-    let textWidth = font.widthOfTextAtSize(usuarioNombre, fontSize);
+    // Función para dividir texto en líneas que quepan en el ancho disponible
+    // Las palabras nunca se cortan, siempre se pasan completas a la siguiente línea
+    const dividirEnLineas = (texto, anchoMaximo, tamanoFuente) => {
+      const palabras = texto.split(' ');
+      const lineas = [];
+      let lineaActual = '';
+      
+      for (const palabra of palabras) {
+        // Verificar si la palabra sola cabe en el ancho disponible
+        const anchoPalabra = font.widthOfTextAtSize(palabra, tamanoFuente);
+        
+        // Si la palabra sola no cabe, debemos reducir el tamaño de fuente o forzarla
+        // Por ahora, la ponemos en su propia línea aunque sea muy larga
+        if (anchoPalabra > anchoMaximo) {
+          // Si ya hay contenido en la línea actual, guardarlo
+          if (lineaActual) {
+            lineas.push(lineaActual);
+            lineaActual = '';
+          }
+          // La palabra muy larga va en su propia línea
+          lineas.push(palabra);
+          continue;
+        }
+        
+        // Intentar agregar la palabra a la línea actual
+        const textoPrueba = lineaActual ? `${lineaActual} ${palabra}` : palabra;
+        const anchoTexto = font.widthOfTextAtSize(textoPrueba, tamanoFuente);
+        
+        if (anchoTexto <= anchoMaximo) {
+          // Cabe en la línea actual
+          lineaActual = textoPrueba;
+        } else {
+          // No cabe, guardar la línea actual y empezar una nueva con esta palabra
+          if (lineaActual) {
+            lineas.push(lineaActual);
+          }
+          lineaActual = palabra;
+        }
+      }
+      
+      // Agregar la última línea si tiene contenido
+      if (lineaActual) {
+        lineas.push(lineaActual);
+      }
+      
+      return lineas.length > 0 ? lineas : [texto];
+    };
     
-    // Ajustar el tamaño si el texto es muy ancho
-    while (textWidth > ancho * 0.95 && fontSize > 8) {
-      fontSize -= 0.5;
-      textWidth = font.widthOfTextAtSize(usuarioNombre, fontSize);
+    // Calcular tamaño de fuente inicial
+    let fontSize = Math.min(alto * 0.35, 24); // Máximo 24pt
+    const anchoDisponible = ancho * 0.95; // 95% del ancho para margen
+    const altoDisponible = alto * 0.9; // 90% del alto para margen
+    let espacioEntreLineas = fontSize * 1.2; // Espacio entre líneas (120% del tamaño de fuente)
+    
+    let lineas = [];
+    let alturaTotal = 0;
+    let intentos = 0;
+    const minFontSize = 8;
+    
+    // Primero, verificar que todas las palabras individuales quepan en el ancho
+    // Si alguna palabra es muy larga, reducir el tamaño de fuente hasta que quepa
+    const palabras = usuarioNombreMayusculas.split(' ');
+    for (const palabra of palabras) {
+      let tamanoPalabra = fontSize;
+      while (font.widthOfTextAtSize(palabra, tamanoPalabra) > anchoDisponible && tamanoPalabra > minFontSize) {
+        tamanoPalabra -= 0.5;
+      }
+      if (tamanoPalabra < fontSize) {
+        fontSize = tamanoPalabra;
+        espacioEntreLineas = fontSize * 1.2;
+      }
     }
     
-    // Calcular posición centrada
-    const textHeight = fontSize;
-    const textX = x + (ancho - textWidth) / 2;
-    const textY = y + (alto - textHeight) / 2;
+    // Iterar hasta encontrar un tamaño que quepa tanto en ancho como en alto
+    while (intentos < 50 && fontSize >= minFontSize) {
+      lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
+      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+      
+      // Verificar que todas las líneas quepan en el ancho
+      let todasCaben = true;
+      for (const linea of lineas) {
+        if (font.widthOfTextAtSize(linea, fontSize) > anchoDisponible) {
+          todasCaben = false;
+          break;
+        }
+      }
+      
+      // Si todas las líneas caben en ancho y alto, usar este tamaño
+      if (todasCaben && alturaTotal <= altoDisponible) {
+        break;
+      }
+      
+      // Reducir tamaño de fuente y recalcular
+      fontSize -= 0.5;
+      espacioEntreLineas = fontSize * 1.2;
+      intentos++;
+    }
     
-    // Dibujar el nombre del usuario centrado en el espacio
-    page.drawText(usuarioNombre, {
-      x: textX,
-      y: textY,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0.6), // Azul oscuro
+    // Si aún no cabe en alto, forzar a que quepa reduciendo más el tamaño
+    if (alturaTotal > altoDisponible && fontSize > minFontSize) {
+      fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
+      espacioEntreLineas = fontSize * 1.2;
+      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+      // Recalcular líneas con el nuevo tamaño
+      lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
+      // Recalcular altura total con las nuevas líneas
+      alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+    }
+    
+    // Asegurar que tenemos líneas y un tamaño de fuente válido
+    if (!lineas || lineas.length === 0 || fontSize < minFontSize) {
+      console.error('Error: No se pudieron generar líneas válidas o el tamaño de fuente es muy pequeño');
+      lineas = [usuarioNombreMayusculas];
+      fontSize = Math.max(8, Math.min(alto * 0.2, ancho / usuarioNombreMayusculas.length * 1.5));
+      alturaTotal = fontSize;
+    }
+    
+    // Calcular posición centrada verticalmente
+    // Y en PDF es desde abajo, así que calculamos desde la parte inferior del recuadro
+    const espacioVerticalRestante = alto - alturaTotal;
+    const margenSuperior = espacioVerticalRestante / 2;
+    const textYInicial = y + alto - margenSuperior - fontSize; // Posición de la primera línea desde abajo
+    
+    // Dibujar cada línea centrada horizontalmente
+    lineas.forEach((linea, index) => {
+      if (!linea || linea.trim() === '') return; // Saltar líneas vacías
+      
+      const textWidth = font.widthOfTextAtSize(linea, fontSize);
+      const textX = x + (ancho - textWidth) / 2;
+      // Para cada línea subsiguiente, subimos espacioEntreLineas
+      const textY = textYInicial - (index * espacioEntreLineas);
+      
+      page.drawText(linea, {
+        x: textX,
+        y: textY,
+        size: fontSize,
+        font: font,
+        color: rgb(0, 0, 0.6), // Azul oscuro
+      });
     });
 
     // Guardar el PDF modificado
@@ -118,7 +236,7 @@ export async function insertarMultiplesFirmasEnPDF(pdfPath, firmas) {
         timeStyle: 'short' 
       });
 
-      lastPage.drawText(`Firmado por: ${firma.usuario_nombre}`, {
+      lastPage.drawText(`Firmado por: ${firma.usuario_nombre.toUpperCase()}`, {
         x: x,
         y: y - 12,
         size: fontSize,
@@ -197,7 +315,7 @@ export async function agregarPaginaAuditoria(pdfPath, firmas, documentoInfo) {
     yPosition -= 25;
     firmas.forEach((firma, index) => {
       const fechaFirma = new Date(firma.fecha_firma).toLocaleString('es-MX');
-      auditoriaPage.drawText(`${index + 1}. ${firma.usuario_nombre} - ${fechaFirma}`, {
+      auditoriaPage.drawText(`${index + 1}. ${firma.usuario_nombre.toUpperCase()} - ${fechaFirma}`, {
         x: 70,
         y: yPosition,
         size: 9,

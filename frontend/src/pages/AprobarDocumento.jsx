@@ -4,7 +4,8 @@ import {
   Container, Box, Typography, Button, Paper, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, Grid, AppBar, Toolbar,
   Card, CardContent, Chip, Divider, Alert, Accordion, AccordionSummary,
-  AccordionDetails, List, ListItem, ListItemIcon, ListItemText
+  AccordionDetails, List, ListItem, ListItemIcon, ListItemText,
+  FormControl, InputLabel, Select, MenuItem, CircularProgress
 } from '@mui/material';
 import { 
   Check, Close, Clear, ArrowBack, Description, Edit, 
@@ -32,6 +33,10 @@ const AprobarDocumento = () => {
   const [rechazoDialogOpen, setRechazoDialogOpen] = useState(false);
   const [motivoRechazo, setMotivoRechazo] = useState('');
   const [miEstado, setMiEstado] = useState(null); // Estado del usuario actual
+  const [miembrosGrupo, setMiembrosGrupo] = useState([]);
+  const [miembroSeleccionado, setMiembroSeleccionado] = useState('');
+  const [cargandoMiembros, setCargandoMiembros] = useState(false);
+  const [esGrupo, setIsGrupo] = useState(false);
 
   useEffect(() => {
     cargarDocumento();
@@ -48,6 +53,11 @@ const AprobarDocumento = () => {
       const aprobadorActual = doc.aprobadores?.find(a => a.token_firma === token);
       if (aprobadorActual) {
         setMiEstado(aprobadorActual.estado);
+        // Verificar si es un grupo
+        if (aprobadorActual.correo_grupo) {
+          setIsGrupo(true);
+          cargarMiembrosGrupo(aprobadorActual.correo_grupo);
+        }
       }
 
       // Construir URL del PDF
@@ -70,12 +80,44 @@ const AprobarDocumento = () => {
     setNumPages(numPages);
   };
 
+  const cargarMiembrosGrupo = async (correoGrupo) => {
+    if (!correoGrupo) return;
+    
+    setCargandoMiembros(true);
+    try {
+      const response = await api.get(`/grupos/miembros?correo=${encodeURIComponent(correoGrupo)}`);
+      setMiembrosGrupo(response.data.miembros || []);
+    } catch (error) {
+      console.error('Error al cargar miembros del grupo:', error);
+      toast.error('Error al cargar los miembros del grupo');
+      setMiembrosGrupo([]);
+    } finally {
+      setCargandoMiembros(false);
+    }
+  };
+
 
   const handleAprobar = async () => {
+    // Si es un grupo, validar que se haya seleccionado un miembro
+    if (esGrupo && !miembroSeleccionado) {
+      toast.error('Por favor, selecciona la persona que está firmando por el grupo');
+      return;
+    }
+
+    console.log('[FRONTEND] handleAprobar - Inicio', {
+      token,
+      esGrupo,
+      miembroSeleccionado,
+      grupoMiembroId: esGrupo && miembroSeleccionado ? Number(miembroSeleccionado) : null
+    });
+
     try {
       const response = await api.post('/firmas/firmar', {
-        token: token
+        token: token,
+        grupoMiembroId: esGrupo && miembroSeleccionado ? Number(miembroSeleccionado) : null
       });
+
+      console.log('[FRONTEND] Respuesta exitosa:', response.data);
 
       if (response.data.success) {
         toast.success('Documento aprobado exitosamente');
@@ -88,8 +130,9 @@ const AprobarDocumento = () => {
         setTimeout(() => navigate('/dashboard'), 2000);
       }
     } catch (error) {
-      toast.error('Error al aprobar el documento');
-      console.error(error);
+      console.error('[FRONTEND] Error al aprobar:', error);
+      console.error('[FRONTEND] Error response:', error.response);
+      toast.error(error.response?.data?.message || 'Error al aprobar el documento');
     }
   };
 
@@ -582,8 +625,47 @@ const AprobarDocumento = () => {
           <Typography variant="body1" sx={{ mb: 2 }}>
             ¿Estás seguro de que deseas <strong>aprobar</strong> este documento?
           </Typography>
+          
+          {esGrupo && (
+            <Box sx={{ mb: 2 }}>
+              <FormControl fullWidth required>
+                <InputLabel>Selecciona quién está firmando</InputLabel>
+                <Select
+                  value={miembroSeleccionado}
+                  label="Selecciona quién está firmando"
+                  onChange={(e) => setMiembroSeleccionado(e.target.value)}
+                  disabled={cargandoMiembros}
+                >
+                  {cargandoMiembros ? (
+                    <MenuItem disabled>
+                      <CircularProgress size={20} sx={{ mr: 1 }} />
+                      Cargando miembros...
+                    </MenuItem>
+                  ) : miembrosGrupo.length === 0 ? (
+                    <MenuItem disabled>No hay miembros disponibles</MenuItem>
+                  ) : (
+                    miembrosGrupo.map((miembro) => (
+                      <MenuItem key={miembro.registroId} value={miembro.registroId}>
+                        <Box>
+                          <Typography variant="body1">{miembro.nombre}</Typography>
+                          {miembro.correo && (
+                            <Typography variant="caption" color="text.secondary">
+                              {miembro.correo}
+                            </Typography>
+                          )}
+                        </Box>
+                      </MenuItem>
+                    ))
+                  )}
+                </Select>
+              </FormControl>
+            </Box>
+          )}
+          
           <Typography variant="body2" color="text.secondary">
-            Tu nombre completo será registrado en el documento como aprobación digital.
+            {esGrupo 
+              ? 'El nombre de la persona seleccionada será registrado en el documento como aprobación digital.'
+              : 'Tu nombre completo será registrado en el documento como aprobación digital.'}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ p: 2.5, gap: 1 }}>

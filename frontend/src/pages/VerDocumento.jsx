@@ -15,6 +15,65 @@ import 'react-pdf/dist/Page/TextLayer.css';
 // Configurar worker de PDF.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
+/**
+ * Filtra aprobadores duplicados: si un aprobador está pendiente en versiones anteriores
+ * y también está pendiente en la versión actual, solo se muestra la versión actual.
+ * Las versiones rechazadas y aprobadas siempre se mantienen.
+ */
+const filtrarAprobadoresDuplicados = (aprobadores, versionActual) => {
+  // Agrupar por correo del usuario
+  const aprobadoresPorCorreo = {};
+  
+  aprobadores.forEach(aprobador => {
+    const correo = aprobador.usuario_correo;
+    if (!aprobadoresPorCorreo[correo]) {
+      aprobadoresPorCorreo[correo] = [];
+    }
+    aprobadoresPorCorreo[correo].push(aprobador);
+  });
+
+  const resultado = [];
+
+  // Procesar cada grupo de aprobadores (mismo correo)
+  Object.values(aprobadoresPorCorreo).forEach(grupo => {
+    // Ordenar por versión descendente
+    grupo.sort((a, b) => b.version - a.version);
+
+    // Encontrar la versión actual (más reciente)
+    const versionActualAprobador = grupo.find(a => a.version === versionActual);
+    const versionesAnteriores = grupo.filter(a => a.version < versionActual);
+
+    // Si hay versión actual pendiente
+    if (versionActualAprobador && versionActualAprobador.estado === 'pendiente') {
+      // Verificar si hay versiones anteriores pendientes
+      const versionesAnterioresPendientes = versionesAnteriores.filter(
+        a => a.estado === 'pendiente'
+      );
+
+      // Si hay versiones anteriores pendientes, solo mantener la actual
+      if (versionesAnterioresPendientes.length > 0) {
+        // Agregar versión actual
+        resultado.push(versionActualAprobador);
+        
+        // Agregar versiones anteriores que NO están pendientes (rechazadas o aprobadas)
+        versionesAnteriores.forEach(a => {
+          if (a.estado !== 'pendiente') {
+            resultado.push(a);
+          }
+        });
+      } else {
+        // No hay versiones anteriores pendientes, agregar todas
+        resultado.push(...grupo);
+      }
+    } else {
+      // No hay versión actual pendiente, agregar todas las versiones
+      resultado.push(...grupo);
+    }
+  });
+
+  return resultado;
+};
+
 const VerDocumento = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -58,7 +117,10 @@ const VerDocumento = () => {
           });
         });
       }
-      setAprobadores(todosAprobadores);
+
+      // Filtrar aprobadores: si está pendiente en versión anterior y también en actual, solo mostrar actual
+      const aprobadoresFiltrados = filtrarAprobadoresDuplicados(todosAprobadores, doc.version);
+      setAprobadores(aprobadoresFiltrados);
 
       // Obtener aprobadores solo de la versión actual para el contador
       const aprobadoresActualResponse = await api.get(`/documentos/${id}/aprobadores`);
