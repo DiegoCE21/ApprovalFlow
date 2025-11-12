@@ -104,20 +104,11 @@ const AprobarDocumento = () => {
       return;
     }
 
-    console.log('[FRONTEND] handleAprobar - Inicio', {
-      token,
-      esGrupo,
-      miembroSeleccionado,
-      grupoMiembroId: esGrupo && miembroSeleccionado ? Number(miembroSeleccionado) : null
-    });
-
     try {
       const response = await api.post('/firmas/firmar', {
         token: token,
         grupoMiembroId: esGrupo && miembroSeleccionado ? Number(miembroSeleccionado) : null
       });
-
-      console.log('[FRONTEND] Respuesta exitosa:', response.data);
 
       if (response.data.success) {
         toast.success('Documento aprobado exitosamente');
@@ -130,8 +121,6 @@ const AprobarDocumento = () => {
         setTimeout(() => navigate('/dashboard'), 2000);
       }
     } catch (error) {
-      console.error('[FRONTEND] Error al aprobar:', error);
-      console.error('[FRONTEND] Error response:', error.response);
       toast.error(error.response?.data?.message || 'Error al aprobar el documento');
     }
   };

@@ -9,13 +9,13 @@ Crea un archivo `.env` en la raíz del directorio `frontend/` con las siguientes
 # URL del backend API
 # IMPORTANTE: Debe incluir el protocolo (http:// o https://)
 # Desarrollo: http://localhost:3301
-# Producción: https://api.tu-dominio.com o http://10.2.2.64:3301
+# Producción: http://server.flujoaprobaciones.com:3301
 # Si no incluyes el protocolo, se agregará automáticamente http://
 VITE_API_URL=http://localhost:3301
 
 # URL del frontend (para referencias internas)
 # Desarrollo: http://localhost:3300
-# Producción: https://tu-dominio.com
+# Producción: http://server.flujoaprobaciones.com:3300
 VITE_FRONTEND_URL=http://localhost:3300
 
 # Puerto del servidor de desarrollo (opcional)

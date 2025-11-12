@@ -21,8 +21,9 @@ Edita el archivo `backend/.env` y configura las siguientes variables:
 NODE_ENV=production
 
 # URLs de producción
-FRONTEND_URL=https://tu-dominio.com
-BACKEND_URL=https://api.tu-dominio.com
+# Usar el dominio del servidor
+FRONTEND_URL=http://server.flujoaprobaciones.com:3300
+BACKEND_URL=http://server.flujoaprobaciones.com:3301
 
 # Puerto del servidor
 PORT=3301
@@ -105,10 +106,13 @@ Edita el archivo `frontend/.env` y configura:
 
 ```env
 # URL del backend API de producción
-VITE_API_URL=https://api.tu-dominio.com
+VITE_API_URL=http://server.flujoaprobaciones.com:3301
 
 # URL del frontend (opcional, para referencias internas)
-VITE_FRONTEND_URL=https://tu-dominio.com
+VITE_FRONTEND_URL=http://server.flujoaprobaciones.com:3300
+
+# Puerto del servidor (opcional)
+VITE_PORT=3300
 
 # Modo de ejecución
 VITE_NODE_ENV=production

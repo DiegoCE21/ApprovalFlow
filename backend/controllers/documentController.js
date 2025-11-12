@@ -555,8 +555,6 @@ export async function obtenerHistorialVersiones(req, res) {
     // Si tiene documento_padre_id, ese es el raíz, sino él mismo es la raíz
     const documentoRaizId = documento.documento_padre_id || id;
 
-    console.log(`[DEBUG] Documento ID: ${id}, Documento Padre ID: ${documento.documento_padre_id}, Raíz ID: ${documentoRaizId}`);
-
     // Obtener todas las versiones (incluyendo la raíz)
     // Buscar: el documento raíz mismo Y todos los que tienen ese raíz como padre
     const versiones = await pool.query(
@@ -568,11 +566,6 @@ export async function obtenerHistorialVersiones(req, res) {
        ORDER BY d.version ASC`,
       [documentoRaizId]
     );
-
-    console.log(`[DEBUG] Versiones encontradas: ${versiones.rows.length}`);
-    versiones.rows.forEach(v => {
-      console.log(`  - ID: ${v.id}, Versión: ${v.version}, Padre: ${v.documento_padre_id}, Estado: ${v.estado}`);
-    });
 
     return res.status(200).json({
       success: true,

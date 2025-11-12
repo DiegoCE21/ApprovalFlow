@@ -14,10 +14,6 @@ if (API_URL && !API_URL.startsWith('http://') && !API_URL.startsWith('https://')
 // Remover barra final si existe
 API_URL = API_URL.replace(/\/$/, '');
 
-// Log para debug
-console.log('[AXIOS] API URL configurada:', API_URL);
-console.log('[AXIOS] Base URL completa:', `${API_URL}/api`);
-
 const api = axios.create({
   baseURL: `${API_URL}/api`,
   withCredentials: true,
@@ -48,19 +44,11 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error('[AXIOS] Error en respuesta:', {
-      url: error.config?.url,
-      method: error.config?.method,
-      status: error.response?.status,
-      message: error.response?.data?.message || error.message
-    });
-    
     // Solo redirigir al login si es un error de autenticación Y no es una ruta pública
     const publicRoutes = ['/firmas/firmar', '/firmas/rechazar', '/documentos/token/', '/documentos/descargar/'];
     const isPublicRoute = publicRoutes.some(route => error.config?.url?.includes(route));
     
     if ((error.response?.status === 401 || error.response?.status === 403) && !isPublicRoute) {
-      console.log('[AXIOS] Redirigiendo al login por error de autenticación');
       // Token expirado o inválido - redirigir al login
       window.location.href = '/login';
     }

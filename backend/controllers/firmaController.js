@@ -11,15 +11,11 @@ export async function firmarDocumento(req, res) {
   const client = await pool.connect();
   
   try {
-    console.log('[DEBUG] firmarDocumento - Inicio');
-    console.log('[DEBUG] Request body:', JSON.stringify(req.body, null, 2));
-    
     await client.query('BEGIN');
 
     const { token, grupoMiembroId: grupoMiembroIdRaw } = req.body;
 
     if (!token) {
-      console.log('[DEBUG] Error: Token no proporcionado');
       return res.status(400).json({
         success: false,
         message: 'Token es requerido'
@@ -30,8 +26,6 @@ export async function firmarDocumento(req, res) {
     const grupoMiembroId = grupoMiembroIdRaw !== null && grupoMiembroIdRaw !== undefined 
       ? Number(grupoMiembroIdRaw) 
       : null;
-    
-    console.log('[DEBUG] grupoMiembroId procesado:', grupoMiembroId);
 
     // Obtener aprobador y documento por token
     const aprobadorResult = await client.query(
@@ -68,15 +62,8 @@ export async function firmarDocumento(req, res) {
     }
 
     const aprobador = aprobadorResult.rows[0];
-    
-    console.log('[DEBUG] Aprobador encontrado:', {
-      id: aprobador.aprobador_id,
-      correo_grupo: aprobador.correo_grupo,
-      estado: aprobador.estado
-    });
 
     if (aprobador.estado === 'aprobado') {
-      console.log('[DEBUG] Error: Documento ya aprobado');
       return res.status(400).json({
         success: false,
         message: 'Ya has firmado este documento'
@@ -89,22 +76,13 @@ export async function firmarDocumento(req, res) {
     let usuarioIdFirma = aprobador.usuario_id;
 
     if (aprobador.correo_grupo) {
-      console.log('[DEBUG] Es un grupo, correo_grupo:', aprobador.correo_grupo);
-      console.log('[DEBUG] grupoMiembroId recibido:', grupoMiembroId);
-      
       // Si es un grupo, el grupoMiembroId es obligatorio
       if (!grupoMiembroId) {
-        console.log('[DEBUG] Error: grupoMiembroId no proporcionado para grupo');
         return res.status(400).json({
           success: false,
           message: 'Debe seleccionar la persona que está firmando por el grupo'
         });
       }
-
-      console.log('[DEBUG] Buscando miembro del grupo:', {
-        grupoMiembroId,
-        correo_grupo: aprobador.correo_grupo
-      });
 
       const miembroResult = await client.query(
         `SELECT 
@@ -116,10 +94,7 @@ export async function firmarDocumento(req, res) {
         [grupoMiembroId, aprobador.correo_grupo]
       );
 
-      console.log('[DEBUG] Resultado de búsqueda de miembro:', miembroResult.rows.length);
-
       if (miembroResult.rows.length === 0) {
-        console.log('[DEBUG] Error: Miembro del grupo no encontrado');
         return res.status(400).json({
           success: false,
           message: 'Miembro del grupo no encontrado o inactivo'
@@ -127,22 +102,9 @@ export async function firmarDocumento(req, res) {
       }
 
       const miembro = miembroResult.rows[0];
-      console.log('[DEBUG] Miembro encontrado:', {
-        nombre: miembro.miembro_nombre,
-        correo: miembro.miembro_correo,
-        usuario_id: miembro.miembro_usuario_id
-      });
-      
       nombreFirma = miembro.miembro_nombre;
       correoFirma = miembro.miembro_correo || aprobador.usuario_correo;
       usuarioIdFirma = miembro.miembro_usuario_id || aprobador.usuario_id;
-
-      console.log('[DEBUG] Valores para firma:', {
-        nombreFirma,
-        correoFirma,
-        usuarioIdFirma,
-        grupoMiembroId
-      });
 
       // Actualizar el aprobador con la información del miembro
       await client.query(
@@ -154,8 +116,6 @@ export async function firmarDocumento(req, res) {
          WHERE id = $5`,
         [nombreFirma, correoFirma, usuarioIdFirma, grupoMiembroId, aprobador.aprobador_id]
       );
-      
-      console.log('[DEBUG] Aprobador actualizado con información del miembro');
     }
 
     // Insertar firma en la tabla (sin firma_base64)
@@ -256,8 +216,7 @@ export async function firmarDocumento(req, res) {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('[ERROR] Error al firmar documento:', error);
-    console.error('[ERROR] Stack trace:', error.stack);
+    console.error('Error al firmar documento:', error);
     return res.status(500).json({
       success: false,
       message: 'Error al firmar el documento',
@@ -265,7 +224,6 @@ export async function firmarDocumento(req, res) {
     });
   } finally {
     client.release();
-    console.log('[DEBUG] firmarDocumento - Fin');
   }
 }
 

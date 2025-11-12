@@ -11,12 +11,12 @@ PORT=3301
 
 # URL del frontend (para CORS y redirecciones)
 # Desarrollo: http://localhost:3300
-# Producción: https://tu-dominio.com
+# Producción: http://server.flujoaprobaciones.com:3300
 FRONTEND_URL=http://localhost:3300
 
 # URL del backend (para referencias internas)
 # Desarrollo: http://localhost:3301
-# Producción: https://api.tu-dominio.com
+# Producción: http://server.flujoaprobaciones.com:3301
 BACKEND_URL=http://localhost:3301
 
 # Modo de ejecución: development | production
