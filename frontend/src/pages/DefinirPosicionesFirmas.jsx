@@ -28,6 +28,7 @@ const DefinirPosicionesFirmas = () => {
   const [aprobadorActual, setAprobadorActual] = useState(0);
   const [escala, setEscala] = useState(1.0);
   const [dimensionesPagina, setDimensionesPagina] = useState({ width: 0, height: 0 });
+  const [dimensionesPDFReales, setDimensionesPDFReales] = useState({ width: 0, height: 0 });
   const [loading, setLoading] = useState(false);
   const [dibujando, setDibujando] = useState(false);
   const [puntoInicio, setPuntoInicio] = useState(null);
@@ -57,6 +58,13 @@ const DefinirPosicionesFirmas = () => {
   const onPageLoadSuccess = (page) => {
     const viewport = page.getViewport({ scale: 1.0 });
     setDimensionesPagina({
+      width: viewport.width,
+      height: viewport.height
+    });
+    
+    // Las dimensiones del viewport con scale 1.0 son las dimensiones reales del PDF
+    // Guardarlas para usar en la conversión de coordenadas
+    setDimensionesPDFReales({
       width: viewport.width,
       height: viewport.height
     });
@@ -127,10 +135,29 @@ const DefinirPosicionesFirmas = () => {
     const realX = Math.min(puntoInicio.x, x);
     const realY = Math.min(puntoInicio.y, y);
 
+    // Obtener dimensiones reales del PDF (usar dimensionesPDFReales si están disponibles)
+    const alturaPDF = dimensionesPDFReales.height > 0 ? dimensionesPDFReales.height : dimensionesPagina.height;
+    
+    if (alturaPDF <= 0) {
+      toast.error('Error: No se pudieron obtener las dimensiones del PDF. Intenta recargar la página.');
+      setDibujando(false);
+      setPuntoInicio(null);
+      setRectanguloTemporal(null);
+      return;
+    }
+    
     // Convertir coordenadas de canvas a coordenadas PDF
-    // En PDF, Y inicia desde abajo, en canvas desde arriba
+    // IMPORTANTE: En el backend, la coordenada Y representa la parte INFERIOR del rectángulo (desde abajo)
+    // 
+    // Si dibujamos un rectángulo en canvas desde (realX, realY) con altura 'alto':
+    // - La esquina superior izquierda en canvas está en Y = realY (desde arriba)
+    // - La esquina inferior izquierda en canvas está en Y = realY + alto (desde arriba)
+    // 
+    // En PDF, necesitamos la coordenada Y de la esquina inferior izquierda del rectángulo
+    // (porque Y en PDF se mide desde abajo y el backend espera la parte inferior):
+    // - La esquina inferior izquierda en PDF está en Y = alturaPDF - (realY + alto)
     const pdfX = realX;
-    const pdfY = dimensionesPagina.height - realY - alto;
+    const pdfY = alturaPDF - (realY + alto);
 
     const nuevaPosicion = {
       x: pdfX,
@@ -356,8 +383,12 @@ const DefinirPosicionesFirmas = () => {
                   {aprobadoresConPosicion.map((aprobador, idx) => {
                     if (!aprobador.posicion || aprobador.posicion.pagina !== pageNumber) return null;
                     
+                    // Convertir coordenadas PDF a coordenadas canvas para mostrar
+                    // En PDF: Y es desde abajo, en canvas: Y es desde arriba
+                    const alturaPDF = dimensionesPDFReales.height || dimensionesPagina.height;
                     const markerX = aprobador.posicion.x * escala;
-                    const markerY = (dimensionesPagina.height - aprobador.posicion.y - aprobador.posicion.alto) * escala;
+                    // La posición Y en PDF es desde abajo, convertir a canvas (desde arriba)
+                    const markerY = (alturaPDF - aprobador.posicion.y - aprobador.posicion.alto) * escala;
                     
                     return (
                       <Box
