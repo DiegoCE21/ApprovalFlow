@@ -11,6 +11,7 @@ import {
   insertarMultiplesFirmasEnPDF, 
   agregarPaginaAuditoria 
 } from '../utils/pdfSigner.js';
+import { PDFDocument, rgb } from 'pdf-lib';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -136,6 +137,13 @@ export async function subirDocumento(req, res) {
 
     // Normalizar nombre del archivo para asegurar codificación UTF-8 correcta
     const nombreArchivoNormalizado = normalizarNombreArchivo(req.file.originalname);
+
+    // Guardar una copia del PDF original para poder reaplicar firmas después
+    // El PDF original se guarda con el mismo nombre pero con "-original" antes de .pdf
+    const rutaArchivoOriginal = req.file.path.replace(/\.pdf$/i, '-original.pdf');
+    if (!fs.existsSync(rutaArchivoOriginal)) {
+      fs.copyFileSync(req.file.path, rutaArchivoOriginal);
+    }
 
     // Insertar documento en la base de datos
     const resultDocumento = await client.query(
@@ -826,6 +834,12 @@ export async function subirNuevaVersion(req, res) {
     // Normalizar nombre del archivo para asegurar codificación UTF-8 correcta
     const nombreArchivoNormalizado = normalizarNombreArchivo(req.file.originalname);
 
+    // Guardar una copia del PDF original para poder reaplicar firmas después
+    const rutaArchivoOriginal = req.file.path.replace(/\.pdf$/i, '-original.pdf');
+    if (!fs.existsSync(rutaArchivoOriginal)) {
+      fs.copyFileSync(req.file.path, rutaArchivoOriginal);
+    }
+
     // Generar nuevo token de acceso
     const tokenAcceso = crypto.randomBytes(32).toString('hex');
 
@@ -998,6 +1012,316 @@ export async function subirNuevaVersion(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Error al subir la nueva versión',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Actualizar posiciones de firmas y reaplicar todas las firmas en el PDF
+ * Solo disponible para diego.castillo@fastprobags.com
+ */
+export async function actualizarPosicionesFirmas(req, res) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    // Verificar que el usuario es diego.castillo@fastprobags.com
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    if (!esAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para actualizar posiciones de firmas'
+      });
+    }
+
+    const { id } = req.params;
+    const { aprobadores } = req.body;
+
+    if (!aprobadores || !Array.isArray(aprobadores)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere un array de aprobadores con sus nuevas posiciones'
+      });
+    }
+
+    // Obtener el documento
+    const docResult = await client.query(
+      `SELECT * FROM documentos WHERE id = $1`,
+      [id]
+    );
+
+    if (docResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Documento no encontrado'
+      });
+    }
+
+    const documento = docResult.rows[0];
+
+    // Obtener el PDF original (sin firmas)
+    // Si existe el archivo -original.pdf, usarlo; si no, usar el archivo actual
+    const rutaArchivoOriginal = documento.ruta_archivo.replace(/\.pdf$/i, '-original.pdf');
+    let pdfOriginalPath = documento.ruta_archivo;
+    
+    if (fs.existsSync(rutaArchivoOriginal)) {
+      pdfOriginalPath = rutaArchivoOriginal;
+    } else {
+      // Si no existe el original, crear una copia del actual antes de reaplicar
+      console.log('⚠️ No se encontró PDF original, usando el PDF actual como base');
+    }
+
+    // Obtener todas las firmas existentes (aprobadores que ya firmaron)
+    const firmasResult = await client.query(
+      `SELECT 
+        f.id as firma_id,
+        f.aprobador_id,
+        f.usuario_id,
+        f.usuario_nombre,
+        a.posicion_x as posicion_x_actual,
+        a.posicion_y as posicion_y_actual,
+        a.pagina_firma as pagina_firma_actual,
+        a.ancho_firma as ancho_firma_actual,
+        a.alto_firma as alto_firma_actual
+      FROM firmas f
+      INNER JOIN aprobadores a ON f.aprobador_id = a.id
+      WHERE f.documento_id = $1`,
+      [id]
+    );
+
+    const firmasExistentes = firmasResult.rows;
+
+    // Actualizar posiciones de los aprobadores
+    for (const aprobadorData of aprobadores) {
+      const { aprobador_id, posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma } = aprobadorData;
+
+      if (!aprobador_id) {
+        continue;
+      }
+
+      await client.query(
+        `UPDATE aprobadores 
+         SET posicion_x = $1, 
+             posicion_y = $2, 
+             pagina_firma = $3,
+             ancho_firma = $4,
+             alto_firma = $5
+         WHERE id = $6 AND documento_id = $7`,
+        [
+          posicion_x,
+          posicion_y,
+          pagina_firma !== undefined ? pagina_firma : -1,
+          ancho_firma || 150,
+          alto_firma || 75,
+          aprobador_id,
+          id
+        ]
+      );
+    }
+
+    // Si hay firmas existentes, reaplicarlas en las nuevas posiciones
+    if (firmasExistentes.length > 0) {
+      // Cargar el PDF original
+      const pdfBytes = fs.readFileSync(pdfOriginalPath);
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+
+      // Obtener las nuevas posiciones actualizadas de los aprobadores
+      const aprobadoresActualizados = await client.query(
+        `SELECT 
+          a.id as aprobador_id,
+          a.posicion_x,
+          a.posicion_y,
+          a.pagina_firma,
+          a.ancho_firma,
+          a.alto_firma,
+          f.usuario_nombre
+        FROM aprobadores a
+        INNER JOIN firmas f ON a.id = f.aprobador_id
+        WHERE a.documento_id = $1 AND f.documento_id = $1`,
+        [id]
+      );
+
+      // Cargar la fuente una vez
+      const font = await pdfDoc.embedFont('Helvetica-Bold');
+
+      // Aplicar cada firma en su nueva posición directamente en el PDFDocument
+      for (const aprobador of aprobadoresActualizados.rows) {
+        const paginaIndex = aprobador.pagina_firma === -1 
+          ? pdfDoc.getPageCount() - 1 
+          : aprobador.pagina_firma - 1;
+        
+        const page = pdfDoc.getPage(paginaIndex);
+        const x = aprobador.posicion_x || 50;
+        const y = aprobador.posicion_y || 50;
+        const ancho = aprobador.ancho_firma || 150;
+        const alto = aprobador.alto_firma || 75;
+        const usuarioNombre = aprobador.usuario_nombre.toUpperCase();
+
+        // Usar la misma lógica de insertarFirmaEnPDF pero aplicada directamente
+        const anchoDisponible = ancho * 0.95;
+        const altoDisponible = alto * 0.9;
+        let fontSize = Math.min(alto * 0.35, 24);
+        const minFontSize = 6;
+        let espacioEntreLineas = fontSize * 1.2;
+
+        // Dividir el nombre en líneas usando la misma lógica robusta que insertarFirmaEnPDF
+        const dividirEnLineas = (texto, anchoMaximo, tamanoFuente) => {
+          const palabras = texto.split(' ');
+          const lineas = [];
+          let lineaActual = '';
+          
+          for (const palabra of palabras) {
+            // Verificar si la palabra sola cabe
+            let anchoPalabra = font.widthOfTextAtSize(palabra, tamanoFuente);
+            
+            // Si la palabra sola no cabe, dividirla en caracteres
+            if (anchoPalabra > anchoMaximo) {
+              if (lineaActual) {
+                lineas.push(lineaActual);
+                lineaActual = '';
+              }
+              
+              // Dividir la palabra en caracteres
+              let palabraRestante = palabra;
+              while (palabraRestante.length > 0) {
+                let caracteresEnLinea = '';
+                for (let i = 0; i < palabraRestante.length; i++) {
+                  const prueba = caracteresEnLinea + palabraRestante[i];
+                  const anchoPrueba = font.widthOfTextAtSize(prueba, tamanoFuente);
+                  if (anchoPrueba <= anchoMaximo) {
+                    caracteresEnLinea = prueba;
+                  } else {
+                    break;
+                  }
+                }
+                
+                if (caracteresEnLinea.length > 0) {
+                  lineas.push(caracteresEnLinea);
+                  palabraRestante = palabraRestante.substring(caracteresEnLinea.length);
+                } else {
+                  lineas.push(palabraRestante[0] || '');
+                  palabraRestante = palabraRestante.substring(1);
+                }
+              }
+              continue;
+            }
+            
+            // Intentar agregar la palabra a la línea actual
+            const textoPrueba = lineaActual ? `${lineaActual} ${palabra}` : palabra;
+            const anchoTexto = font.widthOfTextAtSize(textoPrueba, tamanoFuente);
+            
+            if (anchoTexto <= anchoMaximo) {
+              lineaActual = textoPrueba;
+            } else {
+              if (lineaActual) {
+                lineas.push(lineaActual);
+              }
+              lineaActual = palabra;
+            }
+          }
+          
+          if (lineaActual) {
+            lineas.push(lineaActual);
+          }
+          
+          return lineas.length > 0 ? lineas : [texto];
+        };
+
+        let lineas = dividirEnLineas(usuarioNombre, anchoDisponible, fontSize);
+
+        // Ajustar tamaño de fuente si es necesario (iterar hasta encontrar tamaño adecuado)
+        let intentos = 0;
+        while (intentos < 100 && fontSize >= minFontSize) {
+          lineas = dividirEnLineas(usuarioNombre, anchoDisponible, fontSize);
+          
+          // Verificar que todas las líneas quepan en el ancho
+          let todasCabenEnAncho = true;
+          for (const linea of lineas) {
+            const anchoLinea = font.widthOfTextAtSize(linea, fontSize);
+            if (anchoLinea > anchoDisponible * 1.01) {
+              todasCabenEnAncho = false;
+              break;
+            }
+          }
+          
+          const alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+          
+          if (todasCabenEnAncho && alturaTotal <= altoDisponible) {
+            break;
+          }
+          
+          fontSize -= 0.3;
+          espacioEntreLineas = fontSize * 1.2;
+          intentos++;
+        }
+        
+        // Recalcular líneas con el tamaño final
+        lineas = dividirEnLineas(usuarioNombre, anchoDisponible, fontSize);
+
+        // Calcular posición centrada
+        const alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
+        const espacioVerticalRestante = alto - alturaTotal;
+        const margenSuperior = Math.max(0, espacioVerticalRestante / 2);
+        const textYInicial = y + alto - margenSuperior - fontSize;
+
+        // Dibujar cada línea
+        lineas.forEach((linea, index) => {
+          if (!linea || linea.trim() === '') return;
+          
+          const textWidth = font.widthOfTextAtSize(linea, fontSize);
+          const textX = x + (ancho - textWidth) / 2;
+          const textY = textYInicial - (index * espacioEntreLineas);
+          
+          page.drawText(linea, {
+            x: Math.max(x, Math.min(x + ancho - textWidth, textX)),
+            y: Math.max(y, Math.min(y + alto - fontSize, textY)),
+            size: fontSize,
+            font: font,
+            color: rgb(0, 0, 0.6),
+          });
+        });
+      }
+
+      // Guardar el PDF final con todas las firmas reaplicadas
+      const pdfBytesFinal = await pdfDoc.save();
+      fs.writeFileSync(documento.ruta_archivo, pdfBytesFinal);
+    }
+
+    // Registrar en auditoría
+    await client.query(
+      `INSERT INTO log_auditoria (
+        documento_id, usuario_id, usuario_nombre, usuario_correo,
+        accion, descripcion, ip_address
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        id,
+        req.user.id,
+        req.user.nombre,
+        req.user.correo,
+        'actualizar_posiciones',
+        `Posiciones de firmas actualizadas y reaplicadas por ${req.user.nombre}`,
+        req.ip
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Posiciones de firmas actualizadas y reaplicadas exitosamente',
+      firmasReaplicadas: firmasExistentes.length
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al actualizar posiciones de firmas:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al actualizar posiciones de firmas',
       error: error.message
     });
   } finally {
