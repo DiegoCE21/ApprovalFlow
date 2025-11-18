@@ -5,7 +5,7 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Chip, Grid, Card, CardContent, CircularProgress, Alert
 } from '@mui/material';
-import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload } from '@mui/icons-material';
+import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, Edit } from '@mui/icons-material';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
@@ -85,8 +85,13 @@ const VerDocumento = () => {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      setUser(JSON.parse(userData));
+    }
     cargarDocumento();
   }, [id]);
 
@@ -220,6 +225,16 @@ const VerDocumento = () => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1, ml: 2 }}>
             Detalles del Documento
           </Typography>
+          {user?.correo === 'diego.castillo@fastprobags.com' && (
+            <Button 
+              color="inherit" 
+              startIcon={<Edit />} 
+              onClick={() => navigate(`/editar-posiciones-firmas/${id}`)}
+              sx={{ mr: 1 }}
+            >
+              Editar Posiciones de Firmas
+            </Button>
+          )}
           <Button color="inherit" startIcon={<Download />} onClick={handleDescargar}>
             Descargar
           </Button>

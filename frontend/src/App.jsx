@@ -10,6 +10,7 @@ import AprobarDocumento from './pages/AprobarDocumento';
 import SubirDocumento from './pages/SubirDocumento';
 import VerDocumento from './pages/VerDocumento';
 import DefinirPosicionesFirmas from './pages/DefinirPosicionesFirmas';
+import EditarPosicionesFirmas from './pages/EditarPosicionesFirmas';
 import SubirNuevaVersion from './pages/SubirNuevaVersion';
 import GestionPermisos from './pages/GestionPermisos';
 import GestionGruposFirmantes from './pages/GestionGruposFirmantes';
@@ -57,6 +58,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <DefinirPosicionesFirmas />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/editar-posiciones-firmas/:id" 
+            element={
+              <ProtectedRoute>
+                <EditarPosicionesFirmas />
               </ProtectedRoute>
             } 
           />
