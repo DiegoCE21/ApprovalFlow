@@ -20,6 +20,58 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
+ * Normalizar nombre de archivo para asegurar codificación UTF-8 correcta
+ * @param {string} filename - Nombre del archivo original
+ * @returns {string} - Nombre normalizado en UTF-8
+ */
+function normalizarNombreArchivo(filename) {
+  if (!filename) return filename;
+  
+  try {
+    // Si el nombre viene como Buffer, convertirlo a string
+    if (Buffer.isBuffer(filename)) {
+      filename = filename.toString('utf8');
+    }
+    
+    // Detectar si el nombre tiene caracteres mal codificados (como "Ã³" en lugar de "ó")
+    // Esto ocurre cuando UTF-8 se interpreta como latin1/ISO-8859-1
+    const tieneCaracteresMalCodificados = /Ã[¡-¿]|Ã[€-ÿ]/.test(filename);
+    
+    if (tieneCaracteresMalCodificados) {
+      try {
+        // Intentar corregir: interpretar como latin1 y convertir a UTF-8
+        // Esto corrige casos como "aprobaciÃ³n" -> "aprobación"
+        const corrected = Buffer.from(filename, 'latin1').toString('utf8');
+        
+        // Verificar que la corrección mejoró (no tiene más caracteres raros)
+        if (!/Ã[¡-¿]|Ã[€-ÿ]/.test(corrected)) {
+          filename = corrected;
+        }
+      } catch (e) {
+        // Si falla, intentar otra estrategia: decodificar desde UTF-8 mal interpretado
+        try {
+          // A veces el problema es que viene doblemente codificado
+          const bytes = Buffer.from(filename, 'latin1');
+          const decoded = bytes.toString('utf8');
+          if (!/Ã[¡-¿]|Ã[€-ÿ]/.test(decoded)) {
+            filename = decoded;
+          }
+        } catch (e2) {
+          // Si todo falla, mantener el original
+        }
+      }
+    }
+    
+    // Asegurar que el resultado sea una cadena UTF-8 válida
+    // Limpiar cualquier carácter de control no deseado pero mantener caracteres especiales válidos
+    return Buffer.from(filename, 'utf8').toString('utf8');
+  } catch (error) {
+    console.error('Error al normalizar nombre de archivo:', error);
+    return filename;
+  }
+}
+
+/**
  * Subir un nuevo documento PDF
  */
 export async function subirDocumento(req, res) {
@@ -57,6 +109,9 @@ export async function subirDocumento(req, res) {
       fechaLimite.setHours(fechaLimite.getHours() + horas);
     }
 
+    // Normalizar nombre del archivo para asegurar codificación UTF-8 correcta
+    const nombreArchivoNormalizado = normalizarNombreArchivo(req.file.originalname);
+
     // Insertar documento en la base de datos
     const resultDocumento = await client.query(
       `INSERT INTO documentos (
@@ -67,7 +122,7 @@ export async function subirDocumento(req, res) {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *`,
       [
-        req.file.originalname,
+        nombreArchivoNormalizado,
         req.file.path,
         tipoDocumento,
         descripcion,
@@ -134,7 +189,7 @@ export async function subirDocumento(req, res) {
       await enviarNotificacionAprobacion(
         aprobador.correo,
         aprobador.nombre,
-        req.file.originalname,
+        nombreArchivoNormalizado,
         tokenFirma,
         documento.usuario_creador_nombre
       );
@@ -169,7 +224,7 @@ export async function subirDocumento(req, res) {
         req.user.nombre,
         req.user.correo,
         'subida',
-        `Documento "${req.file.originalname}" subido al sistema`,
+        `Documento "${nombreArchivoNormalizado}" subido al sistema`,
         req.ip,
         req.get('user-agent')
       ]
@@ -728,6 +783,9 @@ export async function subirNuevaVersion(req, res) {
     // Encontrar el documento raíz de la cadena
     let documentoRaizId = documentoAnterior.documento_padre_id || id;
 
+    // Normalizar nombre del archivo para asegurar codificación UTF-8 correcta
+    const nombreArchivoNormalizado = normalizarNombreArchivo(req.file.originalname);
+
     // Generar nuevo token de acceso
     const tokenAcceso = crypto.randomBytes(32).toString('hex');
 
@@ -740,7 +798,7 @@ export async function subirNuevaVersion(req, res) {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *`,
       [
-        req.file.originalname,
+        nombreArchivoNormalizado,
         req.file.path,
         documentoAnterior.tipo_documento,
         documentoAnterior.descripcion,
@@ -836,7 +894,7 @@ export async function subirNuevaVersion(req, res) {
       await enviarNotificacionNuevaVersion(
         usuarioCorreo,
         usuarioNombre,
-        req.file.originalname,
+        nombreArchivoNormalizado,
         tokenFirma,
         nuevoDocumento.version
       );
@@ -879,7 +937,7 @@ export async function subirNuevaVersion(req, res) {
         req.user.nombre,
         req.user.correo,
         'nueva_version',
-        `Nueva versión (v${nuevoDocumento.version}) del documento "${req.file.originalname}" subida al sistema`,
+        `Nueva versión (v${nuevoDocumento.version}) del documento "${nombreArchivoNormalizado}" subida al sistema`,
         req.ip,
         req.get('user-agent')
       ]

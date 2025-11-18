@@ -1,7 +1,16 @@
 node_modules/
 
+# Ignorar cualquier archivo relacionado con environment variables
+*.env
+*.env.*
+.env
+.env.*
+*.local
+*.env.local
+*.env.example
+*.env.development
+*.env.production
+*.env.test
+
 # Ignorar todos los archivos PDF
 *.pdf
-
-# Ignorar todos los archivos .env
-*.env
