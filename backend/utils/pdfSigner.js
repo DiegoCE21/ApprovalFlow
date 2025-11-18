@@ -150,10 +150,10 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
       const maxLineas = Math.max(1, Math.floor(altoDisponible / (fontSize * 1.2)));
       if (lineas.length > maxLineas) {
         // Si hay demasiadas líneas, reducir más el tamaño
-        fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
-        espacioEntreLineas = fontSize * 1.2;
-        // Recalcular líneas con el nuevo tamaño
-        lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
+      fontSize = Math.max(minFontSize, (altoDisponible / (lineas.length * 1.2)));
+      espacioEntreLineas = fontSize * 1.2;
+      // Recalcular líneas con el nuevo tamaño
+      lineas = dividirEnLineas(usuarioNombreMayusculas, anchoDisponible, fontSize);
       }
       // Recalcular altura total con las nuevas líneas
       alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));

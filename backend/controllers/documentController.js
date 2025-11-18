@@ -73,6 +73,30 @@ function normalizarNombreArchivo(filename) {
 }
 
 /**
+ * Normalizar documento completo (aplica normalización al nombre de archivo)
+ * @param {object} documento - Documento de la base de datos
+ * @returns {object} - Documento con nombre normalizado
+ */
+function normalizarDocumento(documento) {
+  if (!documento) return documento;
+  
+  return {
+    ...documento,
+    nombre_archivo: normalizarNombreArchivo(documento.nombre_archivo)
+  };
+}
+
+/**
+ * Normalizar array de documentos
+ * @param {array} documentos - Array de documentos
+ * @returns {array} - Array de documentos con nombres normalizados
+ */
+function normalizarDocumentos(documentos) {
+  if (!documentos || !Array.isArray(documentos)) return documentos;
+  return documentos.map(doc => normalizarDocumento(doc));
+}
+
+/**
  * Subir un nuevo documento PDF
  */
 export async function subirDocumento(req, res) {
@@ -320,9 +344,12 @@ export async function obtenerMisDocumentos(req, res) {
     
     const result = await pool.query(query, esAdmin ? [] : [req.user.id]);
 
+    // Normalizar nombres de archivo antes de devolver
+    const documentosNormalizados = normalizarDocumentos(result.rows);
+
     return res.status(200).json({
       success: true,
-      documentos: result.rows
+      documentos: documentosNormalizados
     });
 
   } catch (error) {
@@ -386,9 +413,12 @@ export async function obtenerDocumentosPendientes(req, res) {
       [usuarioId, correoUsuario || null, numeroNomina || null]
     );
 
+    // Normalizar nombres de archivo antes de devolver
+    const documentosNormalizados = normalizarDocumentos(result.rows);
+
     return res.status(200).json({
       success: true,
-      documentos: result.rows
+      documentos: documentosNormalizados
     });
 
   } catch (error) {
@@ -433,9 +463,12 @@ export async function obtenerDocumentoPorToken(req, res) {
 
     documento.aprobadores = aprobadoresResult.rows;
 
+    // Normalizar nombre de archivo antes de devolver
+    const documentoNormalizado = normalizarDocumento(documento);
+
     return res.status(200).json({
       success: true,
-      documento: documento
+      documento: documentoNormalizado
     });
 
   } catch (error) {
@@ -638,9 +671,12 @@ export async function obtenerDocumentoPorId(req, res) {
       });
     }
 
+    // Normalizar nombre de archivo antes de devolver
+    const documentoNormalizado = normalizarDocumento(result.rows[0]);
+
     return res.status(200).json({
       success: true,
-      documento: result.rows[0]
+      documento: documentoNormalizado
     });
 
   } catch (error) {
@@ -716,9 +752,12 @@ export async function obtenerHistorialVersiones(req, res) {
       [documentoRaizId]
     );
 
+    // Normalizar nombres de archivo antes de devolver
+    const versionesNormalizadas = normalizarDocumentos(versiones.rows);
+
     return res.status(200).json({
       success: true,
-      versiones: versiones.rows,
+      versiones: versionesNormalizadas,
       documentoRaizId: documentoRaizId
     });
 
