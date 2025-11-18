@@ -1,1 +1,7 @@
 node_modules/
+
+# Ignorar todos los archivos PDF
+*.pdf
+
+# Ignorar todos los archivos .env
+*.env

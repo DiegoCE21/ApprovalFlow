@@ -198,41 +198,71 @@ export async function subirDocumento(req, res) {
 
 /**
  * Obtener documentos del usuario actual (solo la versión más reciente de cada documento)
+ * Si el usuario es diego.castillo@fastprobags.com, puede ver todos los documentos
  */
 export async function obtenerMisDocumentos(req, res) {
   try {
+    // Verificar si el usuario es diego.castillo@fastprobags.com (puede ver todos los documentos)
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    
     // Obtener solo la versión más reciente de cada documento
     // Agrupamos por documento_padre_id (si existe) o por id (si es documento raíz)
-    const result = await pool.query(
-      `WITH documentos_con_raiz AS (
+    const query = esAdmin
+      ? `WITH documentos_con_raiz AS (
+          SELECT 
+            d.*,
+            COALESCE(d.documento_padre_id, d.id) as documento_raiz_id,
+            (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id) as total_aprobadores,
+            (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id AND a.estado = 'aprobado') as aprobadores_completados
+          FROM documentos d
+        ),
+        versiones_por_raiz AS (
+          SELECT 
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY documento_raiz_id 
+              ORDER BY version DESC, fecha_creacion DESC
+            ) as rn
+          FROM documentos_con_raiz
+        )
         SELECT 
-          d.*,
-          COALESCE(d.documento_padre_id, d.id) as documento_raiz_id,
-          (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id) as total_aprobadores,
-          (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id AND a.estado = 'aprobado') as aprobadores_completados
-        FROM documentos d
-        WHERE d.usuario_creador_id = $1
-      ),
-      versiones_por_raiz AS (
+          id, nombre_archivo, ruta_archivo, tipo_documento, descripcion, version,
+          documento_padre_id, usuario_creador_id, usuario_creador_nombre, usuario_creador_correo,
+          estado, token_acceso, fecha_creacion, fecha_actualizacion, fecha_finalizacion,
+          tiempo_limite_horas, intervalo_recordatorio_minutos, fecha_limite_aprobacion,
+          total_aprobadores, aprobadores_completados
+        FROM versiones_por_raiz
+        WHERE rn = 1
+        ORDER BY fecha_creacion DESC`
+      : `WITH documentos_con_raiz AS (
+          SELECT 
+            d.*,
+            COALESCE(d.documento_padre_id, d.id) as documento_raiz_id,
+            (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id) as total_aprobadores,
+            (SELECT COUNT(*) FROM aprobadores a WHERE a.documento_id = d.id AND a.estado = 'aprobado') as aprobadores_completados
+          FROM documentos d
+          WHERE d.usuario_creador_id = $1
+        ),
+        versiones_por_raiz AS (
+          SELECT 
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY documento_raiz_id 
+              ORDER BY version DESC, fecha_creacion DESC
+            ) as rn
+          FROM documentos_con_raiz
+        )
         SELECT 
-          *,
-          ROW_NUMBER() OVER (
-            PARTITION BY documento_raiz_id 
-            ORDER BY version DESC, fecha_creacion DESC
-          ) as rn
-        FROM documentos_con_raiz
-      )
-      SELECT 
-        id, nombre_archivo, ruta_archivo, tipo_documento, descripcion, version,
-        documento_padre_id, usuario_creador_id, usuario_creador_nombre, usuario_creador_correo,
-        estado, token_acceso, fecha_creacion, fecha_actualizacion, fecha_finalizacion,
-        tiempo_limite_horas, intervalo_recordatorio_minutos, fecha_limite_aprobacion,
-        total_aprobadores, aprobadores_completados
-      FROM versiones_por_raiz
-      WHERE rn = 1
-      ORDER BY fecha_creacion DESC`,
-      [req.user.id]
-    );
+          id, nombre_archivo, ruta_archivo, tipo_documento, descripcion, version,
+          documento_padre_id, usuario_creador_id, usuario_creador_nombre, usuario_creador_correo,
+          estado, token_acceso, fecha_creacion, fecha_actualizacion, fecha_finalizacion,
+          tiempo_limite_horas, intervalo_recordatorio_minutos, fecha_limite_aprobacion,
+          total_aprobadores, aprobadores_completados
+        FROM versiones_por_raiz
+        WHERE rn = 1
+        ORDER BY fecha_creacion DESC`;
+    
+    const result = await pool.query(query, esAdmin ? [] : [req.user.id]);
 
     return res.status(200).json({
       success: true,
@@ -387,11 +417,18 @@ export async function descargarDocumento(req, res) {
     const correoUsuario = req.user.correo || null;
     const usuarioId = req.user.id;
 
+    // Verificar si el usuario es diego.castillo@fastprobags.com (puede ver todos los documentos)
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+
     // Verificar que el usuario tenga permiso para descargar
     let tienePermiso = false;
 
+    // 0. Si es admin, tiene permiso automáticamente
+    if (esAdmin) {
+      tienePermiso = true;
+    }
     // 1. Verificar si es el creador
-    if (documento.usuario_creador_id === usuarioId) {
+    else if (documento.usuario_creador_id === usuarioId) {
       tienePermiso = true;
     } else {
       // 2. Verificar si es un aprobador directo o miembro de grupo
