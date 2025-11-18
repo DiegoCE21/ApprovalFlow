@@ -1263,25 +1263,36 @@ export async function actualizarPosicionesFirmas(req, res) {
         lineas = dividirEnLineas(usuarioNombre, anchoDisponible, fontSize);
 
         // Calcular posición centrada
+        // IMPORTANTE: 'y' es la coordenada de la parte INFERIOR del rectángulo (desde abajo)
+        // La parte superior del rectángulo está en: y + alto (desde abajo)
         const alturaTotal = (lineas.length * fontSize) + ((lineas.length - 1) * (espacioEntreLineas - fontSize));
         const espacioVerticalRestante = alto - alturaTotal;
         const margenSuperior = Math.max(0, espacioVerticalRestante / 2);
-        const textYInicial = y + alto - margenSuperior - fontSize;
+        const textYInicial = (y + alto) - margenSuperior - fontSize;
+
+        // Límites verticales
+        const textYMinimo = y; // Límite inferior
+        const textYMaximo = (y + alto) - fontSize; // Límite superior
 
         // Dibujar cada línea
         lineas.forEach((linea, index) => {
           if (!linea || linea.trim() === '') return;
           
           const textWidth = font.widthOfTextAtSize(linea, fontSize);
+          // Centrar horizontalmente
           const textX = x + (ancho - textWidth) / 2;
-          const textY = textYInicial - (index * espacioEntreLineas);
+          const textXFinal = Math.max(x, Math.min(x + ancho - textWidth, textX));
+          
+          // Calcular Y para esta línea
+          let textY = textYInicial - (index * espacioEntreLineas);
+          textY = Math.max(textYMinimo, Math.min(textYMaximo, textY));
           
           page.drawText(linea, {
-            x: Math.max(x, Math.min(x + ancho - textWidth, textX)),
-            y: Math.max(y, Math.min(y + alto - fontSize, textY)),
+            x: textXFinal,
+            y: textY,
             size: fontSize,
             font: font,
-            color: rgb(0, 0, 0.6),
+            color: rgb(0, 0, 0.6)
           });
         });
       }

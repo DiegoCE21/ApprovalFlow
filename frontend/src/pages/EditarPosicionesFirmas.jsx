@@ -234,6 +234,20 @@ const EditarPosicionesFirmas = () => {
       ancho: ancho,
       alto: alto
     };
+    
+    // Debug: Log de las coordenadas calculadas
+    console.log('🔍 Frontend - Coordenadas calculadas:', {
+      realX,
+      realY,
+      ancho,
+      alto,
+      alturaPDF,
+      pdfX,
+      pdfY,
+      pageNumber,
+      dimensionesPDFReales,
+      dimensionesPagina
+    });
 
     const nuevosAprobadores = [...aprobadores];
     nuevosAprobadores[aprobadorActual] = {

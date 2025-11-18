@@ -15,6 +15,16 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
     const pdfBytes = fs.readFileSync(pdfPath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
 
+    // Debug: Log de las coordenadas recibidas
+    console.log('🔍 insertarFirmaEnPDF - Coordenadas recibidas:', {
+      x: opciones.x,
+      y: opciones.y,
+      ancho: opciones.ancho,
+      alto: opciones.alto,
+      pagina: opciones.pagina,
+      usuarioNombre: opciones.usuarioNombre
+    });
+
     // Opciones por defecto
     const {
       pagina = -1, // -1 significa última página
@@ -219,22 +229,34 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
     }
     
     // Calcular posición centrada verticalmente
-    // Y en PDF es desde abajo, así que calculamos desde la parte inferior del recuadro
+    // IMPORTANTE: En el backend, 'y' es la coordenada de la parte INFERIOR del rectángulo (desde abajo)
+    // Entonces:
+    // - La parte superior del rectángulo está en: y + alto (desde abajo)
+    // - La parte inferior del rectángulo está en: y (desde abajo)
     const espacioVerticalRestante = alto - alturaTotal;
     const margenSuperior = Math.max(0, espacioVerticalRestante / 2);
-    const textYInicial = y + alto - margenSuperior - fontSize; // Posición de la primera línea desde abajo
+    
+    // Calcular la posición Y de la primera línea de texto
+    // Queremos centrar el texto verticalmente en el rectángulo
+    // La línea base del texto está a 'fontSize' unidades desde la parte superior del texto
+    // Partimos desde la parte superior del rectángulo (y + alto) y restamos el margen y el fontSize
+    const textYInicial = (y + alto) - margenSuperior - fontSize; // Posición de la primera línea desde abajo
     
     // Asegurar que el texto no se salga por arriba o abajo
-    const textYMinimo = y; // Límite inferior
-    const textYMaximo = y + alto - fontSize; // Límite superior
+    const textYMinimo = y; // Límite inferior (parte inferior del rectángulo)
+    const textYMaximo = (y + alto) - fontSize; // Límite superior (parte superior del rectángulo menos fontSize)
     
     // Dibujar cada línea centrada horizontalmente
     lineas.forEach((linea, index) => {
       if (!linea || linea.trim() === '') return; // Saltar líneas vacías
       
       const textWidth = font.widthOfTextAtSize(linea, fontSize);
+      // Centrar el texto horizontalmente dentro del rectángulo
+      // x es la coordenada X de la esquina izquierda del rectángulo
+      const textX = x + (ancho - textWidth) / 2;
+      
       // Asegurar que el texto no se salga horizontalmente
-      const textX = Math.max(x, Math.min(x + ancho - textWidth, x + (ancho - textWidth) / 2));
+      const textXFinal = Math.max(x, Math.min(x + ancho - textWidth, textX));
       
       // Para cada línea subsiguiente, subimos espacioEntreLineas
       let textY = textYInicial - (index * espacioEntreLineas);
@@ -243,11 +265,11 @@ export async function insertarFirmaEnPDF(pdfPath, firmaBase64, opciones = {}) {
       textY = Math.max(textYMinimo, Math.min(textYMaximo, textY));
       
       page.drawText(linea, {
-        x: textX,
+        x: textXFinal,
         y: textY,
         size: fontSize,
         font: font,
-        color: rgb(0, 0, 0.6), // Azul oscuro
+        color: rgb(0, 0, 0.6) // Azul oscuro
       });
     });
 
