@@ -35,7 +35,8 @@ function normalizarNombreArchivo(filename) {
     
     // Detectar si el nombre tiene caracteres mal codificados (como "Ã³" en lugar de "ó")
     // Esto ocurre cuando UTF-8 se interpreta como latin1/ISO-8859-1
-    const tieneCaracteresMalCodificados = /Ã[¡-¿]|Ã[€-ÿ]/.test(filename);
+    // Buscar el patrón "Ã" seguido de caracteres que indican codificación incorrecta
+    const tieneCaracteresMalCodificados = /Ã[^\s]/u.test(filename);
     
     if (tieneCaracteresMalCodificados) {
       try {
@@ -44,7 +45,7 @@ function normalizarNombreArchivo(filename) {
         const corrected = Buffer.from(filename, 'latin1').toString('utf8');
         
         // Verificar que la corrección mejoró (no tiene más caracteres raros)
-        if (!/Ã[¡-¿]|Ã[€-ÿ]/.test(corrected)) {
+        if (!/Ã[^\s]/u.test(corrected)) {
           filename = corrected;
         }
       } catch (e) {
@@ -53,7 +54,7 @@ function normalizarNombreArchivo(filename) {
           // A veces el problema es que viene doblemente codificado
           const bytes = Buffer.from(filename, 'latin1');
           const decoded = bytes.toString('utf8');
-          if (!/Ã[¡-¿]|Ã[€-ÿ]/.test(decoded)) {
+          if (!/Ã[^\s]/u.test(decoded)) {
             filename = decoded;
           }
         } catch (e2) {
