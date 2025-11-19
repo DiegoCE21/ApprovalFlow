@@ -206,6 +206,59 @@ const VerDocumento = () => {
     }
   };
 
+  const abrirDialogoEditar = () => {
+    setFormularioEditar({
+      nombre_archivo: documento.nombre_archivo || '',
+      tipo_documento: documento.tipo_documento || '',
+      descripcion: documento.descripcion || '',
+      tiempo_limite_horas: documento.tiempo_limite_horas || '',
+      intervalo_recordatorio_minutos: documento.intervalo_recordatorio_minutos || ''
+    });
+    setDialogoEditar(true);
+  };
+
+  const cerrarDialogoEditar = () => {
+    setDialogoEditar(false);
+  };
+
+  const handleEditar = async () => {
+    try {
+      setLoading(true);
+      const response = await api.put(`/documentos/${id}`, formularioEditar);
+      toast.success(response.data.message || 'Documento actualizado exitosamente');
+      cerrarDialogoEditar();
+      cargarDocumento(); // Recargar el documento
+    } catch (error) {
+      console.error('Error al editar documento:', error);
+      toast.error(error.response?.data?.message || 'Error al editar documento');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const abrirDialogoEliminar = () => {
+    setDialogoEliminar(true);
+  };
+
+  const cerrarDialogoEliminar = () => {
+    setDialogoEliminar(false);
+  };
+
+  const handleEliminar = async () => {
+    try {
+      setLoading(true);
+      const response = await api.delete(`/documentos/${id}`);
+      toast.success(response.data.message || 'Documento eliminado exitosamente');
+      cerrarDialogoEliminar();
+      navigate('/dashboard'); // Redirigir al dashboard
+    } catch (error) {
+      console.error('Error al eliminar documento:', error);
+      toast.error(error.response?.data?.message || 'Error al eliminar documento');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getEstadoColor = (estado) => {
     const colores = {
       'pendiente': 'warning',
