@@ -10,7 +10,9 @@ import {
   obtenerAprobadoresDocumento,
   subirNuevaVersion,
   obtenerHistorialVersiones,
-  actualizarPosicionesFirmas
+  actualizarPosicionesFirmas,
+  editarDocumento,
+  eliminarDocumento
 } from '../controllers/documentController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { verificarPermisoSubida } from '../middleware/verificarPermisoSubida.js';
@@ -51,6 +53,12 @@ router.get('/:id/historial', authenticateToken, obtenerHistorialVersiones);
 
 // PUT /api/documentos/:id/posiciones-firmas - Actualizar posiciones de firmas y reaplicarlas (solo admin)
 router.put('/:id/posiciones-firmas', authenticateToken, actualizarPosicionesFirmas);
+
+// PUT /api/documentos/:id - Editar documento (solo creador o admin)
+router.put('/:id', authenticateToken, editarDocumento);
+
+// DELETE /api/documentos/:id - Eliminar documento (solo creador o admin)
+router.delete('/:id', authenticateToken, eliminarDocumento);
 
 // DEBUG: Ver todos los documentos
 router.get('/debug/todos', authenticateToken, async (req, res) => {

@@ -166,6 +166,20 @@ const DefinirPosicionesFirmas = () => {
       ancho: ancho,
       alto: alto
     };
+    
+    // Debug: Log de las coordenadas calculadas
+    console.log('🔍 Frontend (DefinirPosiciones) - Coordenadas calculadas:', {
+      realX,
+      realY,
+      ancho,
+      alto,
+      alturaPDF,
+      pdfX,
+      pdfY,
+      pageNumber,
+      dimensionesPDFReales,
+      dimensionesPagina
+    });
 
     const nuevosAprobadores = [...aprobadoresConPosicion];
     nuevosAprobadores[aprobadorActual] = {

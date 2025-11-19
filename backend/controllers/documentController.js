@@ -1339,3 +1339,270 @@ export async function actualizarPosicionesFirmas(req, res) {
     client.release();
   }
 }
+
+/**
+ * Editar un documento (solo metadatos, no el archivo PDF)
+ * Solo el creador o diego.castillo@fastprobags.com pueden editar
+ */
+export async function editarDocumento(req, res) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { id } = req.params;
+    const { nombre_archivo, tipo_documento, descripcion, tiempo_limite_horas, intervalo_recordatorio_minutos } = req.body;
+    const usuarioId = req.user.id;
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    
+    // Obtener el documento
+    const docResult = await client.query(
+      `SELECT id, usuario_creador_id, estado, nombre_archivo FROM documentos WHERE id = $1`,
+      [id]
+    );
+    
+    if (docResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Documento no encontrado'
+      });
+    }
+    
+    const documento = docResult.rows[0];
+    
+    // Verificar permisos: solo el creador o el admin pueden editar
+    if (!esAdmin && documento.usuario_creador_id !== usuarioId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para editar este documento'
+      });
+    }
+    
+    // Preparar campos a actualizar
+    const camposActualizar = [];
+    const valores = [];
+    let contador = 1;
+    
+    if (nombre_archivo !== undefined) {
+      const nombreArchivoNormalizado = normalizarNombreArchivo(nombre_archivo);
+      camposActualizar.push(`nombre_archivo = $${contador++}`);
+      valores.push(nombreArchivoNormalizado);
+    }
+    
+    if (tipo_documento !== undefined) {
+      camposActualizar.push(`tipo_documento = $${contador++}`);
+      valores.push(tipo_documento);
+    }
+    
+    if (descripcion !== undefined) {
+      camposActualizar.push(`descripcion = $${contador++}`);
+      valores.push(descripcion);
+    }
+    
+    if (tiempo_limite_horas !== undefined) {
+      camposActualizar.push(`tiempo_limite_horas = $${contador++}`);
+      valores.push(tiempo_limite_horas ? parseInt(tiempo_limite_horas) : null);
+      
+      // Recalcular fecha límite si se actualiza tiempo_limite_horas
+      if (tiempo_limite_horas) {
+        const fechaLimite = new Date();
+        fechaLimite.setHours(fechaLimite.getHours() + parseInt(tiempo_limite_horas));
+        camposActualizar.push(`fecha_limite_aprobacion = $${contador++}`);
+        valores.push(fechaLimite);
+      } else {
+        camposActualizar.push(`fecha_limite_aprobacion = $${contador++}`);
+        valores.push(null);
+      }
+    }
+    
+    if (intervalo_recordatorio_minutos !== undefined) {
+      camposActualizar.push(`intervalo_recordatorio_minutos = $${contador++}`);
+      valores.push(intervalo_recordatorio_minutos ? parseInt(intervalo_recordatorio_minutos) : null);
+    }
+    
+    if (camposActualizar.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionaron campos para actualizar'
+      });
+    }
+    
+    // Agregar el ID al final para el WHERE
+    valores.push(id);
+    
+    // Actualizar el documento
+    const updateQuery = `
+      UPDATE documentos 
+      SET ${camposActualizar.join(', ')}
+      WHERE id = $${contador}
+      RETURNING *
+    `;
+    
+    const updateResult = await client.query(updateQuery, valores);
+    const documentoActualizado = updateResult.rows[0];
+    
+    // Registrar en auditoría
+    await client.query(
+      `INSERT INTO log_auditoria (
+        documento_id, usuario_id, usuario_nombre, usuario_correo,
+        accion, descripcion, ip_address, user_agent
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        usuarioId,
+        req.user.nombre,
+        req.user.correo,
+        'edicion',
+        `Documento editado: ${documento.nombre_archivo}`,
+        req.ip || req.connection.remoteAddress,
+        req.get('user-agent')
+      ]
+    );
+    
+    await client.query('COMMIT');
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Documento actualizado exitosamente',
+      documento: normalizarDocumento(documentoActualizado)
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al editar documento:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al editar documento',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Eliminar un documento
+ * Solo el creador o diego.castillo@fastprobags.com pueden eliminar
+ */
+export async function eliminarDocumento(req, res) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { id } = req.params;
+    const usuarioId = req.user.id;
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    
+    // Obtener el documento con todas sus versiones
+    const docResult = await client.query(
+      `SELECT id, usuario_creador_id, nombre_archivo, ruta_archivo, documento_padre_id 
+       FROM documentos WHERE id = $1 OR documento_padre_id = $1`,
+      [id]
+    );
+    
+    if (docResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Documento no encontrado'
+      });
+    }
+    
+    // Verificar permisos: solo el creador o el admin pueden eliminar
+    // Verificar que el usuario sea el creador del documento principal
+    const documentoPrincipal = docResult.rows.find(d => d.id === parseInt(id));
+    if (!documentoPrincipal) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Documento principal no encontrado'
+      });
+    }
+    
+    if (!esAdmin && documentoPrincipal.usuario_creador_id !== usuarioId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para eliminar este documento'
+      });
+    }
+    
+    // Obtener todas las rutas de archivos a eliminar (incluyendo originales)
+    const rutasArchivos = [];
+    docResult.rows.forEach(doc => {
+      if (doc.ruta_archivo) {
+        rutasArchivos.push(doc.ruta_archivo);
+        // También intentar eliminar el archivo original si existe
+        const rutaOriginal = doc.ruta_archivo.replace(/\.pdf$/i, '-original.pdf');
+        if (fs.existsSync(rutaOriginal)) {
+          rutasArchivos.push(rutaOriginal);
+        }
+      }
+    });
+    
+    // Obtener todos los IDs de documentos relacionados (incluyendo versiones)
+    const idsDocumentos = docResult.rows.map(d => d.id);
+    
+    // Registrar en auditoría antes de eliminar
+    for (const docId of idsDocumentos) {
+      await client.query(
+        `INSERT INTO log_auditoria (
+          documento_id, usuario_id, usuario_nombre, usuario_correo,
+          accion, descripcion, ip_address, user_agent
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          docId,
+          usuarioId,
+          req.user.nombre,
+          req.user.correo,
+          'eliminacion',
+          `Documento eliminado: ${documentoPrincipal.nombre_archivo}`,
+          req.ip || req.connection.remoteAddress,
+          req.get('user-agent')
+        ]
+      );
+    }
+    
+    // Eliminar documentos (CASCADE eliminará aprobadores, firmas, etc.)
+    await client.query(
+      `DELETE FROM documentos WHERE id = ANY($1::int[])`,
+      [idsDocumentos]
+    );
+    
+    await client.query('COMMIT');
+    
+    // Eliminar archivos físicos después del commit
+    let archivosEliminados = 0;
+    for (const ruta of rutasArchivos) {
+      try {
+        if (fs.existsSync(ruta)) {
+          fs.unlinkSync(ruta);
+          archivosEliminados++;
+        }
+      } catch (error) {
+        console.error(`Error al eliminar archivo ${ruta}:`, error);
+      }
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Documento eliminado exitosamente',
+      archivosEliminados
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al eliminar documento:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar documento',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+}

@@ -3,9 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Container, Box, Typography, Button, Paper, AppBar, Toolbar,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Chip, Grid, Card, CardContent, CircularProgress, Alert
+  Chip, Grid, Card, CardContent, CircularProgress, Alert,
+  Dialog, DialogTitle, DialogContent, DialogActions, TextField,
+  DialogContentText
 } from '@mui/material';
-import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, Edit } from '@mui/icons-material';
+import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, Edit, Delete } from '@mui/icons-material';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
@@ -86,6 +88,15 @@ const VerDocumento = () => {
   const [pageNumber, setPageNumber] = useState(1);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [dialogoEditar, setDialogoEditar] = useState(false);
+  const [dialogoEliminar, setDialogoEliminar] = useState(false);
+  const [formularioEditar, setFormularioEditar] = useState({
+    nombre_archivo: '',
+    tipo_documento: '',
+    descripcion: '',
+    tiempo_limite_horas: '',
+    intervalo_recordatorio_minutos: ''
+  });
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -234,6 +245,26 @@ const VerDocumento = () => {
             >
               Editar Posiciones de Firmas
             </Button>
+          )}
+          {puedeEditarEliminar() && (
+            <>
+              <Button 
+                color="inherit" 
+                startIcon={<Edit />} 
+                onClick={abrirDialogoEditar}
+                sx={{ mr: 1 }}
+              >
+                Editar
+              </Button>
+              <Button 
+                color="inherit" 
+                startIcon={<Delete />} 
+                onClick={abrirDialogoEliminar}
+                sx={{ mr: 1 }}
+              >
+                Eliminar
+              </Button>
+            </>
           )}
           <Button color="inherit" startIcon={<Download />} onClick={handleDescargar}>
             Descargar
@@ -472,6 +503,90 @@ const VerDocumento = () => {
           </Grid>
         </Grid>
       </Container>
+
+      {/* Diálogo de Edición */}
+      <Dialog open={dialogoEditar} onClose={cerrarDialogoEditar} maxWidth="md" fullWidth>
+          <DialogTitle>Editar Documento</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              label="Nombre del Archivo"
+              fullWidth
+              variant="outlined"
+              value={formularioEditar.nombre_archivo}
+              onChange={(e) => setFormularioEditar({ ...formularioEditar, nombre_archivo: e.target.value })}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              margin="dense"
+              label="Tipo de Documento"
+              fullWidth
+              variant="outlined"
+              value={formularioEditar.tipo_documento}
+              onChange={(e) => setFormularioEditar({ ...formularioEditar, tipo_documento: e.target.value })}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              margin="dense"
+              label="Descripción"
+              fullWidth
+              multiline
+              rows={4}
+              variant="outlined"
+              value={formularioEditar.descripcion}
+              onChange={(e) => setFormularioEditar({ ...formularioEditar, descripcion: e.target.value })}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              margin="dense"
+              label="Tiempo Límite (horas)"
+              type="number"
+              fullWidth
+              variant="outlined"
+              value={formularioEditar.tiempo_limite_horas}
+              onChange={(e) => setFormularioEditar({ ...formularioEditar, tiempo_limite_horas: e.target.value })}
+              sx={{ mb: 2 }}
+              helperText="Tiempo límite en horas para aprobar el documento"
+            />
+            <TextField
+              margin="dense"
+              label="Intervalo de Recordatorio (minutos)"
+              type="number"
+              fullWidth
+              variant="outlined"
+              value={formularioEditar.intervalo_recordatorio_minutos}
+              onChange={(e) => setFormularioEditar({ ...formularioEditar, intervalo_recordatorio_minutos: e.target.value })}
+              helperText="Cada cuántos minutos enviar recordatorios"
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={cerrarDialogoEditar}>Cancelar</Button>
+            <Button onClick={handleEditar} variant="contained" color="primary">
+              Guardar Cambios
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Diálogo de Confirmación de Eliminación */}
+        <Dialog open={dialogoEliminar} onClose={cerrarDialogoEliminar}>
+          <DialogTitle>Confirmar Eliminación</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              ¿Estás seguro de que deseas eliminar el documento "{documento?.nombre_archivo}"?
+              <br />
+              <strong>Esta acción no se puede deshacer.</strong>
+              <br />
+              Se eliminarán todas las versiones del documento y todos los archivos asociados.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={cerrarDialogoEliminar}>Cancelar</Button>
+            <Button onClick={handleEliminar} variant="contained" color="error">
+              Eliminar
+            </Button>
+          </DialogActions>
+        </Dialog>
     </>
   );
 };
