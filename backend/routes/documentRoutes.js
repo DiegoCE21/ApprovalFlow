@@ -12,7 +12,8 @@ import {
   obtenerHistorialVersiones,
   actualizarPosicionesFirmas,
   editarDocumento,
-  eliminarDocumento
+  eliminarDocumento,
+  reenviarDocumento
 } from '../controllers/documentController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { verificarPermisoSubida } from '../middleware/verificarPermisoSubida.js';
@@ -59,6 +60,9 @@ router.put('/:id', authenticateToken, editarDocumento);
 
 // DELETE /api/documentos/:id - Eliminar documento (solo creador o admin)
 router.delete('/:id', authenticateToken, eliminarDocumento);
+
+// POST /api/documentos/:id/reenviar - Reenviar documento vencido (solo creador o admin)
+router.post('/:id/reenviar', authenticateToken, reenviarDocumento);
 
 // DEBUG: Ver todos los documentos
 router.get('/debug/todos', authenticateToken, async (req, res) => {

@@ -7,7 +7,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, TextField,
   DialogContentText
 } from '@mui/material';
-import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, Edit, Delete } from '@mui/icons-material';
+import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, Edit, Delete, Send } from '@mui/icons-material';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
@@ -166,6 +166,13 @@ const VerDocumento = () => {
     setNumPages(numPages);
   };
 
+  const puedeEditarEliminar = () => {
+    if (!user || !documento) return false;
+    const esAdmin = user.correo === 'diego.castillo@fastprobags.com';
+    const esCreador = documento.usuario_creador_id === user.id;
+    return esAdmin || esCreador;
+  };
+
   const handleDescargar = async () => {
     try {
       const response = await api.get(`/documentos/descargar/${id}`, {
@@ -185,11 +192,26 @@ const VerDocumento = () => {
     }
   };
 
+  const handleReenviar = async () => {
+    try {
+      setLoading(true);
+      const response = await api.post(`/documentos/${id}/reenviar`);
+      toast.success(response.data.message || 'Documento reenviado exitosamente');
+      cargarDocumento(); // Recargar el documento
+    } catch (error) {
+      console.error('Error al reenviar documento:', error);
+      toast.error(error.response?.data?.message || 'Error al reenviar el documento');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getEstadoColor = (estado) => {
     const colores = {
       'pendiente': 'warning',
       'aprobado': 'success',
-      'rechazado': 'error'
+      'rechazado': 'error',
+      'vencido': 'error'
     };
     return colores[estado] || 'default';
   };
@@ -198,7 +220,8 @@ const VerDocumento = () => {
     const iconos = {
       'pendiente': <PendingActions />,
       'aprobado': <CheckCircle />,
-      'rechazado': <Cancel />
+      'rechazado': <Cancel />,
+      'vencido': <Cancel />
     };
     return iconos[estado] || null;
   };
@@ -295,6 +318,31 @@ const VerDocumento = () => {
                   onClick={() => navigate(`/subir-nueva-version/${id}`)}
                 >
                   Subir Nueva Versión
+                </Button>
+              </Box>
+            )}
+          </Alert>
+        )}
+
+        {/* Alerta si el documento está vencido */}
+        {documento.estado === 'vencido' && (
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            <Typography variant="h6" gutterBottom>
+              Este documento ha vencido
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              El tiempo límite para aprobar este documento ha expirado. Puedes reenviarlo para extender el plazo.
+            </Typography>
+            {puedeEditarEliminar() && (
+              <Box sx={{ mt: 2 }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Send />}
+                  onClick={handleReenviar}
+                  disabled={loading}
+                >
+                  Reenviar Documento
                 </Button>
               </Box>
             )}

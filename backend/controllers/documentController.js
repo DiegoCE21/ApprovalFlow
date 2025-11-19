@@ -1606,3 +1606,142 @@ export async function eliminarDocumento(req, res) {
     client.release();
   }
 }
+
+/**
+ * Reenviar un documento vencido
+ * Solo el creador o diego.castillo@fastprobags.com pueden reenviar
+ */
+export async function reenviarDocumento(req, res) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { id } = req.params;
+    const usuarioId = req.user.id;
+    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    
+    // Obtener el documento
+    const docResult = await client.query(
+      `SELECT id, usuario_creador_id, estado, nombre_archivo, tiempo_limite_horas, fecha_limite_aprobacion,
+              usuario_creador_nombre, usuario_creador_correo
+       FROM documentos WHERE id = $1`,
+      [id]
+    );
+    
+    if (docResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Documento no encontrado'
+      });
+    }
+    
+    const documento = docResult.rows[0];
+    
+    // Verificar permisos: solo el creador o el admin pueden reenviar
+    if (!esAdmin && documento.usuario_creador_id !== usuarioId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para reenviar este documento'
+      });
+    }
+    
+    // Verificar que el documento esté vencido
+    if (documento.estado !== 'vencido') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Este documento no está vencido'
+      });
+    }
+    
+    // Recalcular fecha límite si existe tiempo_limite_horas
+    let nuevaFechaLimite = null;
+    if (documento.tiempo_limite_horas) {
+      nuevaFechaLimite = new Date();
+      nuevaFechaLimite.setHours(nuevaFechaLimite.getHours() + documento.tiempo_limite_horas);
+    }
+    
+    // Actualizar el documento: cambiar estado a pendiente y recalcular fecha límite
+    await client.query(
+      `UPDATE documentos 
+       SET estado = 'pendiente',
+           fecha_limite_aprobacion = $1,
+           ultimo_recordatorio_enviado = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [nuevaFechaLimite, id]
+    );
+    
+    // Obtener aprobadores vencidos y actualizarlos a pendiente
+    await client.query(
+      `UPDATE aprobadores 
+       SET estado = 'pendiente'
+       WHERE documento_id = $1 AND estado = 'vencido'`,
+      [id]
+    );
+    
+    // Obtener aprobadores pendientes para enviar notificaciones
+    const aprobadoresResult = await client.query(
+      `SELECT usuario_nombre, usuario_correo, token_firma, rol_aprobacion
+       FROM aprobadores
+       WHERE documento_id = $1 AND estado = 'pendiente'`,
+      [id]
+    );
+    
+    // Enviar notificaciones a los aprobadores
+    const { enviarNotificacionAprobacion } = await import('../utils/mailer.js');
+    for (const aprobador of aprobadoresResult.rows) {
+      try {
+        await enviarNotificacionAprobacion(
+          aprobador.usuario_correo,
+          aprobador.usuario_nombre,
+          documento.nombre_archivo,
+          aprobador.token_firma,
+          documento.usuario_creador_nombre || documento.usuario_creador_correo
+        );
+      } catch (error) {
+        console.error(`Error al enviar notificación a ${aprobador.usuario_correo}:`, error);
+      }
+    }
+    
+    // Registrar en auditoría
+    await client.query(
+      `INSERT INTO log_auditoria (
+        documento_id, usuario_id, usuario_nombre, usuario_correo,
+        accion, descripcion, ip_address, user_agent
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        usuarioId,
+        req.user.nombre,
+        req.user.correo,
+        'reenvio',
+        `Documento reenviado después de vencer: ${documento.nombre_archivo}`,
+        req.ip || req.connection.remoteAddress,
+        req.get('user-agent')
+      ]
+    );
+    
+    await client.query('COMMIT');
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Documento reenviado exitosamente. Se han notificado a los aprobadores.',
+      notificacionesEnviadas: aprobadoresResult.rows.length
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al reenviar documento:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al reenviar documento',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+}
