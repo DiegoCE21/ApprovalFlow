@@ -18,12 +18,28 @@ const pool = new Pool({
   client_encoding: 'UTF8'
 });
 
-pool.on('connect', () => {
-  console.log('✓ Conectado a PostgreSQL');
-});
+// Variable para rastrear si ya se mostró el mensaje de conexión
+let mensajeConexionMostrado = false;
 
 pool.on('error', (err) => {
   console.error('Error inesperado en cliente PostgreSQL:', err);
 });
+
+// Verificar conexión inicial solo una vez (sin listener 'connect' que se dispara muchas veces)
+const verificarConexion = async () => {
+  if (mensajeConexionMostrado) return;
+  
+  try {
+    const client = await pool.connect();
+    console.log('✓ Conectado a PostgreSQL');
+    mensajeConexionMostrado = true;
+    client.release();
+  } catch (err) {
+    console.error('Error al conectar con PostgreSQL:', err);
+  }
+};
+
+// Verificar conexión al inicializar (solo se ejecuta una vez)
+verificarConexion();
 
 export default pool;
