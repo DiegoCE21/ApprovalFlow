@@ -134,15 +134,21 @@ export async function obtenerMiembrosGrupo(req, res) {
  */
 export async function crearMiembroGrupo(req, res) {
   const client = await pool.connect();
+  let transactionStarted = false;
+  
+  // Extraer y normalizar datos fuera del try para que estén disponibles en el catch
+  const { correoGrupo, miembroNombre, miembroCorreo, miembroNumeroNomina, miembroPuesto, miembroRol, miembroUsuarioId } = req.body;
+  const correoGrupoNormalizado = normalizarCorreo(correoGrupo);
+  const miembroCorreoNormalizado = (miembroCorreo && typeof miembroCorreo === 'string' && miembroCorreo.trim()) 
+    ? normalizarCorreo(miembroCorreo) 
+    : null;
   
   try {
     await client.query('BEGIN');
-
-    const { correoGrupo, miembroNombre, miembroCorreo, miembroNumeroNomina, miembroPuesto, miembroRol, miembroUsuarioId } = req.body;
-
-    const correoGrupoNormalizado = normalizarCorreo(correoGrupo);
+    transactionStarted = true;
 
     if (!correoGrupoNormalizado) {
+      await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
         message: 'El correo del grupo es requerido'
@@ -150,6 +156,7 @@ export async function crearMiembroGrupo(req, res) {
     }
 
     if (!GRUPO_CORREOS.has(correoGrupoNormalizado)) {
+      await client.query('ROLLBACK');
       return res.status(404).json({
         success: false,
         message: 'El correo proporcionado no está configurado como un grupo de firmantes'
@@ -157,16 +164,12 @@ export async function crearMiembroGrupo(req, res) {
     }
 
     if (!miembroNombre) {
+      await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
         message: 'El nombre del miembro es requerido'
       });
     }
-
-    // Normalizar el correo del miembro (si se proporciona)
-    const miembroCorreoNormalizado = (miembroCorreo && typeof miembroCorreo === 'string' && miembroCorreo.trim()) 
-      ? normalizarCorreo(miembroCorreo) 
-      : null;
 
     // Verificar si ya existe un miembro activo con ese correo en ese grupo (solo si se proporciona correo válido)
     if (miembroCorreoNormalizado) {
@@ -221,7 +224,14 @@ export async function crearMiembroGrupo(req, res) {
     });
 
   } catch (error) {
-    await client.query('ROLLBACK');
+    // Solo hacer ROLLBACK si la transacción ya comenzó
+    if (transactionStarted) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Error al hacer ROLLBACK:', rollbackError);
+      }
+    }
     console.error('Error al crear miembro del grupo:', error);
     console.error('Detalles del error:', {
       code: error.code,
@@ -232,6 +242,69 @@ export async function crearMiembroGrupo(req, res) {
     
     // Manejar errores de restricción única
     if (error.code === '23505') { // PostgreSQL unique violation error code
+      // Si es error de clave primaria (secuencia desincronizada), intentar corregirla
+      if (error.constraint === 'grupo_firmantes_pkey') {
+        try {
+          // Sincronizar la secuencia con el valor máximo actual
+          await client.query(`
+            SELECT setval(
+              pg_get_serial_sequence('grupo_firmantes', 'id'),
+              COALESCE((SELECT MAX(id) FROM grupo_firmantes), 1),
+              true
+            );
+          `);
+          console.log('Secuencia de grupo_firmantes sincronizada correctamente');
+          
+          // Intentar la inserción nuevamente
+          await client.query('BEGIN');
+          const result = await client.query(
+            `INSERT INTO grupo_firmantes (
+              correo_grupo, miembro_usuario_id, miembro_nombre, miembro_correo,
+              miembro_numero_nomina, miembro_puesto, miembro_rol, activo
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+            RETURNING *`,
+            [
+              correoGrupoNormalizado,
+              miembroUsuarioId || null,
+              miembroNombre,
+              miembroCorreoNormalizado,
+              miembroNumeroNomina || null,
+              miembroPuesto || null,
+              miembroRol || null
+            ]
+          );
+          await client.query('COMMIT');
+          
+          const nuevoMiembro = result.rows[0];
+          return res.status(201).json({
+            success: true,
+            message: 'Miembro agregado exitosamente al grupo',
+            miembro: {
+              registroId: nuevoMiembro.id,
+              usuarioId: nuevoMiembro.miembro_usuario_id ?? -nuevoMiembro.id,
+              nombre: nuevoMiembro.miembro_nombre,
+              correo: nuevoMiembro.miembro_correo,
+              numeroNomina: nuevoMiembro.miembro_numero_nomina,
+              puesto: nuevoMiembro.miembro_puesto,
+              rol: nuevoMiembro.miembro_rol,
+              correoGrupo: nuevoMiembro.correo_grupo
+            }
+          });
+        } catch (retryError) {
+          try {
+            await client.query('ROLLBACK');
+          } catch (rollbackError) {
+            console.error('Error al hacer ROLLBACK en retry:', rollbackError);
+          }
+          console.error('Error al reintentar inserción después de sincronizar secuencia:', retryError);
+          return res.status(500).json({
+            success: false,
+            message: 'Error al agregar el miembro al grupo. Por favor, intenta nuevamente.',
+            error: process.env.NODE_ENV === 'development' ? retryError.message : undefined
+          });
+        }
+      }
+      
       // Verificar si el error es por el índice único de correo
       if (error.constraint === 'idx_grupo_firmantes_unique_activo' || 
           error.constraint?.includes('correo')) {
@@ -240,6 +313,7 @@ export async function crearMiembroGrupo(req, res) {
           message: 'Ya existe un miembro activo con ese correo en este grupo'
         });
       }
+      
       // Si es otra restricción única, mensaje genérico
       return res.status(400).json({
         success: false,

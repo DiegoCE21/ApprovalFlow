@@ -116,6 +116,18 @@ export async function ensureSchemaUpdates() {
       ADD COLUMN IF NOT EXISTS grupo_miembro_id INTEGER;
     `);
 
+    // Sincronizar la secuencia de grupo_firmantes con el valor máximo actual
+    // Esto corrige problemas de desincronización de secuencias
+    await pool.query(`
+      SELECT setval(
+        pg_get_serial_sequence('grupo_firmantes', 'id'),
+        COALESCE((SELECT MAX(id) FROM grupo_firmantes), 1),
+        true
+      );
+    `).catch((error) => {
+      console.warn('Advertencia al sincronizar secuencia de grupo_firmantes:', error.message);
+    });
+
     schemaEnsured = true;
   } catch (error) {
     schemaEnsured = false;
