@@ -163,21 +163,26 @@ export async function crearMiembroGrupo(req, res) {
       });
     }
 
-    // Verificar si ya existe un miembro activo con ese correo en ese grupo (solo si se proporciona correo)
-    let existeResult = { rows: [] };
-    if (miembroCorreo && miembroCorreo.trim()) {
-      existeResult = await client.query(
+    // Normalizar el correo del miembro (si se proporciona)
+    const miembroCorreoNormalizado = (miembroCorreo && typeof miembroCorreo === 'string' && miembroCorreo.trim()) 
+      ? normalizarCorreo(miembroCorreo) 
+      : null;
+
+    // Verificar si ya existe un miembro activo con ese correo en ese grupo (solo si se proporciona correo válido)
+    if (miembroCorreoNormalizado) {
+      const existeResult = await client.query(
         `SELECT id FROM grupo_firmantes 
          WHERE correo_grupo = $1 AND miembro_correo = $2 AND activo = TRUE`,
-        [correoGrupoNormalizado, normalizarCorreo(miembroCorreo)]
+        [correoGrupoNormalizado, miembroCorreoNormalizado]
       );
-    }
 
-    if (existeResult.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Ya existe un miembro activo con ese correo en este grupo'
-      });
+      if (existeResult.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Ya existe un miembro activo con ese correo en este grupo'
+        });
+      }
     }
 
     const result = await client.query(
@@ -190,7 +195,7 @@ export async function crearMiembroGrupo(req, res) {
         correoGrupoNormalizado,
         miembroUsuarioId || null,
         miembroNombre,
-        (miembroCorreo && miembroCorreo.trim()) ? normalizarCorreo(miembroCorreo) : null,
+        miembroCorreoNormalizado,
         miembroNumeroNomina || null,
         miembroPuesto || null,
         miembroRol || null
@@ -218,19 +223,34 @@ export async function crearMiembroGrupo(req, res) {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error al crear miembro del grupo:', error);
+    console.error('Detalles del error:', {
+      code: error.code,
+      message: error.message,
+      detail: error.detail,
+      constraint: error.constraint
+    });
     
     // Manejar errores de restricción única
     if (error.code === '23505') { // PostgreSQL unique violation error code
+      // Verificar si el error es por el índice único de correo
+      if (error.constraint === 'idx_grupo_firmantes_unique_activo' || 
+          error.constraint?.includes('correo')) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ya existe un miembro activo con ese correo en este grupo'
+        });
+      }
+      // Si es otra restricción única, mensaje genérico
       return res.status(400).json({
         success: false,
-        message: 'Ya existe un miembro activo con ese correo en este grupo'
+        message: 'Ya existe un registro con los mismos datos en este grupo'
       });
     }
     
     return res.status(500).json({
       success: false,
       message: 'Error al agregar el miembro al grupo',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   } finally {
     client.release();
