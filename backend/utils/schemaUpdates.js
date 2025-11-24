@@ -20,8 +20,7 @@ export async function ensureSchemaUpdates() {
         miembro_rol VARCHAR(100),
         activo BOOLEAN DEFAULT TRUE,
         creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(correo_grupo, miembro_correo)
+        actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -62,6 +61,49 @@ export async function ensureSchemaUpdates() {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_grupo_firmantes_activo
       ON grupo_firmantes (activo);
+    `);
+
+    // Eliminar la restricción UNIQUE antigua si existe (puede tener diferentes nombres)
+    await pool.query(`
+      ALTER TABLE grupo_firmantes
+      DROP CONSTRAINT IF EXISTS grupo_firmantes_correo_grupo_miembro_correo_key;
+    `).catch(() => {
+      // Ignorar error si la restricción no existe o tiene otro nombre
+    });
+
+    // Intentar eliminar cualquier otra restricción única relacionada
+    // PostgreSQL puede generar nombres diferentes para la restricción
+    const constraintResult = await pool.query(`
+      SELECT constraint_name
+      FROM information_schema.table_constraints
+      WHERE table_name = 'grupo_firmantes'
+        AND constraint_type = 'UNIQUE'
+        AND constraint_name LIKE '%correo%';
+    `).catch(() => ({ rows: [] }));
+
+    for (const row of constraintResult.rows || []) {
+      // Usar comillas dobles para el nombre de la restricción (identificador)
+      const constraintName = row.constraint_name.replace(/"/g, '""'); // Escapar comillas dobles
+      await pool.query(`
+        ALTER TABLE grupo_firmantes
+        DROP CONSTRAINT IF EXISTS "${constraintName}";
+      `).catch(() => {
+        // Ignorar errores al eliminar restricciones
+      });
+    }
+
+    // Crear índice único parcial solo para miembros activos
+    // Esto permite tener múltiples miembros inactivos con el mismo correo
+    await pool.query(`
+      DROP INDEX IF EXISTS idx_grupo_firmantes_unique_activo;
+    `).catch(() => {
+      // Ignorar error si el índice no existe
+    });
+
+    await pool.query(`
+      CREATE UNIQUE INDEX idx_grupo_firmantes_unique_activo
+      ON grupo_firmantes (correo_grupo, miembro_correo)
+      WHERE activo = TRUE AND miembro_correo IS NOT NULL;
     `);
 
     await pool.query(`

@@ -45,6 +45,24 @@ async function enviarRecordatorios() {
     `);
     
     for (const doc of documentosResult.rows) {
+      // Verificar que el documento aún existe (puede haber sido eliminado)
+      const docExistsResult = await client.query(
+        `SELECT id, estado FROM documentos WHERE id = $1`,
+        [doc.id]
+      );
+      
+      if (docExistsResult.rows.length === 0) {
+        // El documento fue eliminado, saltar
+        continue;
+      }
+      
+      const documentoActual = docExistsResult.rows[0];
+      
+      // Verificar que el documento sigue en estado pendiente (puede haber cambiado)
+      if (documentoActual.estado !== 'pendiente') {
+        continue;
+      }
+      
       // Obtener aprobadores pendientes
       const aprobadoresResult = await client.query(`
         SELECT 
@@ -92,14 +110,17 @@ async function enviarRecordatorios() {
         }
       }
       
-      // Actualizar timestamp del último recordatorio
-      await client.query(`
+      // Actualizar timestamp del último recordatorio (solo si el documento aún existe)
+      const updateResult = await client.query(`
         UPDATE documentos
         SET ultimo_recordatorio_enviado = CURRENT_TIMESTAMP
-        WHERE id = $1
+        WHERE id = $1 AND estado = 'pendiente'
+        RETURNING id
       `, [doc.id]);
       
-      console.log(`✓ Recordatorios enviados para documento: ${doc.nombre_archivo}`);
+      if (updateResult.rows.length > 0) {
+        console.log(`✓ Recordatorios enviados para documento: ${doc.nombre_archivo}`);
+      }
     }
     
   } catch (error) {

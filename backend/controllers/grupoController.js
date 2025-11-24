@@ -218,6 +218,15 @@ export async function crearMiembroGrupo(req, res) {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error al crear miembro del grupo:', error);
+    
+    // Manejar errores de restricción única
+    if (error.code === '23505') { // PostgreSQL unique violation error code
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existe un miembro activo con ese correo en este grupo'
+      });
+    }
+    
     return res.status(500).json({
       success: false,
       message: 'Error al agregar el miembro al grupo',
