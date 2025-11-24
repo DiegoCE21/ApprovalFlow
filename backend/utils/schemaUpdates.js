@@ -128,6 +128,59 @@ export async function ensureSchemaUpdates() {
       console.warn('Advertencia al sincronizar secuencia de grupo_firmantes:', error.message);
     });
 
+    // Crear tabla para rastrear correos enviados y evitar duplicados
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS correos_enviados (
+        id SERIAL PRIMARY KEY,
+        destinatario VARCHAR(255) NOT NULL,
+        documento_id INTEGER REFERENCES documentos(id) ON DELETE CASCADE,
+        aprobador_id INTEGER REFERENCES aprobadores(id) ON DELETE CASCADE,
+        tipo_correo VARCHAR(50) NOT NULL, -- 'aprobacion', 'nueva_version', 'rechazo', 'aprobacion_completa', 'recordatorio'
+        token_firma VARCHAR(255),
+        enviado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Eliminar restricción UNIQUE antigua si existe
+    await pool.query(`
+      ALTER TABLE correos_enviados
+      DROP CONSTRAINT IF EXISTS unique_correo_documento_tipo;
+    `).catch(() => {
+      // Ignorar error si la restricción no existe
+    });
+
+    // Crear índice único usando COALESCE para manejar NULLs correctamente
+    // Esto evita duplicados basándose en destinatario, documento, tipo y token
+    await pool.query(`
+      DROP INDEX IF EXISTS idx_correos_enviados_unique;
+    `).catch(() => {
+      // Ignorar error si el índice no existe
+    });
+
+    await pool.query(`
+      CREATE UNIQUE INDEX idx_correos_enviados_unique
+      ON correos_enviados (destinatario, documento_id, tipo_correo, COALESCE(token_firma, ''));
+    `);
+
+    // Crear índice para búsquedas rápidas
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_correos_enviados_destinatario
+      ON correos_enviados (destinatario, enviado_en);
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_correos_enviados_documento
+      ON correos_enviados (documento_id, tipo_correo);
+    `);
+
+    // Limpiar correos antiguos (más de 30 días) para mantener la tabla pequeña
+    await pool.query(`
+      DELETE FROM correos_enviados
+      WHERE enviado_en < CURRENT_TIMESTAMP - INTERVAL '30 days';
+    `).catch(() => {
+      // Ignorar errores si la tabla no existe aún
+    });
+
     schemaEnsured = true;
   } catch (error) {
     schemaEnsured = false;

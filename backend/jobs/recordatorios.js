@@ -80,33 +80,49 @@ async function enviarRecordatorios() {
         continue;
       }
       
-      // Enviar recordatorio a cada aprobador pendiente
+      // Enviar recordatorio a cada aprobador pendiente (agrupar por correo para evitar duplicados)
+      const correosEnviadosRecordatorio = new Set();
+      
       for (const aprobador of aprobadoresResult.rows) {
-        try {
-          await enviarNotificacionAprobacion(
-            aprobador.usuario_correo,
-            aprobador.usuario_nombre,
-            doc.nombre_archivo,
-            aprobador.token_firma,
-            doc.usuario_creador_nombre
-          );
+        const correoNormalizado = (aprobador.usuario_correo || '').toLowerCase().trim();
+        
+        // Solo enviar si no se ha enviado ya a este correo
+        if (correoNormalizado && !correosEnviadosRecordatorio.has(correoNormalizado)) {
+          correosEnviadosRecordatorio.add(correoNormalizado);
           
-          // Registrar en auditoría
-          await client.query(`
-            INSERT INTO log_auditoria (
-              documento_id, usuario_id, usuario_nombre, usuario_correo,
-              accion, descripcion
-            ) VALUES ($1, NULL, $2, $3, $4, $5)
-          `, [
-            doc.id,
-            aprobador.usuario_nombre,
-            aprobador.usuario_correo,
-            'recordatorio',
-            `Recordatorio automático enviado a ${aprobador.usuario_nombre}`
-          ]);
-          
-        } catch (error) {
-          console.error(`Error enviando recordatorio a ${aprobador.usuario_correo}:`, error);
+          try {
+            // Usar tipo 'recordatorio' para diferenciar de notificaciones iniciales
+            // El sistema de deduplicación verificará si ya se envió en el último minuto
+            await enviarNotificacionAprobacion(
+              aprobador.usuario_correo,
+              aprobador.usuario_nombre,
+              doc.nombre_archivo,
+              aprobador.token_firma,
+              doc.usuario_creador_nombre,
+              doc.id,
+              aprobador.id,
+              'recordatorio'
+            );
+            
+            // Registrar en auditoría
+            await client.query(`
+              INSERT INTO log_auditoria (
+                documento_id, usuario_id, usuario_nombre, usuario_correo,
+                accion, descripcion
+              ) VALUES ($1, NULL, $2, $3, $4, $5)
+            `, [
+              doc.id,
+              aprobador.usuario_nombre,
+              aprobador.usuario_correo,
+              'recordatorio',
+              `Recordatorio automático enviado a ${aprobador.usuario_nombre}`
+            ]);
+            
+          } catch (error) {
+            console.error(`Error enviando recordatorio a ${aprobador.usuario_correo}:`, error);
+          }
+        } else if (correoNormalizado) {
+          console.log(`⏭ Recordatorio omitido (duplicado) a ${correoNormalizado} para documento ${doc.id}`);
         }
       }
       

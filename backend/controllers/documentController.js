@@ -13,6 +13,7 @@ import {
 } from '../utils/pdfSigner.js';
 import { PDFDocument, rgb } from 'pdf-lib';
 import crypto from 'crypto';
+import { esAdminDesdeRequest } from '../utils/adminHelper.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -174,6 +175,9 @@ export async function subirDocumento(req, res) {
     const documento = resultDocumento.rows[0];
 
     // Insertar aprobadores y enviar correos
+    // Usar un Map para agrupar por correo y evitar duplicados
+    const correosEnviados = new Map();
+    
     for (let i = 0; i < aprobadoresArray.length; i++) {
       const aprobador = aprobadoresArray[i];
       const tokenFirma = crypto.randomBytes(32).toString('hex');
@@ -192,13 +196,14 @@ export async function subirDocumento(req, res) {
         throw new Error(`ID de miembro del grupo inválido para el aprobador "${aprobador.nombre}"`);
       }
 
-      await client.query(
+      const aprobadorResult = await client.query(
         `INSERT INTO aprobadores (
           documento_id, usuario_id, usuario_nombre, usuario_correo,
           rol_aprobacion, orden_aprobacion, token_firma, estado,
           posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma,
           correo_grupo, grupo_miembro_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id`,
         [
           documento.id,
           usuarioId,
@@ -218,31 +223,43 @@ export async function subirDocumento(req, res) {
         ]
       );
 
-      // Enviar correo de notificación
-      await enviarNotificacionAprobacion(
-        aprobador.correo,
-        aprobador.nombre,
-        nombreArchivoNormalizado,
-        tokenFirma,
-        documento.usuario_creador_nombre
-      );
+      const aprobadorId = aprobadorResult.rows[0].id;
+      const correoNormalizado = (aprobador.correo || '').toLowerCase().trim();
 
-      // Registrar envío de correo en auditoría
-      await client.query(
-        `INSERT INTO log_auditoria (
-          documento_id, usuario_id, usuario_nombre, usuario_correo,
-          accion, descripcion, ip_address
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          documento.id,
-          aprobador.id,
-          aprobador.nombre,
+      // Solo enviar correo si no se ha enviado ya a este destinatario
+      if (correoNormalizado && !correosEnviados.has(correoNormalizado)) {
+        correosEnviados.set(correoNormalizado, true);
+        
+        // Enviar correo de notificación con IDs para deduplicación
+        await enviarNotificacionAprobacion(
           aprobador.correo,
-          'notificacion',
-          `Correo de solicitud de aprobación enviado a ${aprobador.nombre}`,
-          req.ip
-        ]
-      );
+          aprobador.nombre,
+          nombreArchivoNormalizado,
+          tokenFirma,
+          documento.usuario_creador_nombre,
+          documento.id,
+          aprobadorId
+        );
+
+        // Registrar envío de correo en auditoría
+        await client.query(
+          `INSERT INTO log_auditoria (
+            documento_id, usuario_id, usuario_nombre, usuario_correo,
+            accion, descripcion, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            documento.id,
+            aprobador.id,
+            aprobador.nombre,
+            aprobador.correo,
+            'notificacion',
+            `Correo de solicitud de aprobación enviado a ${aprobador.nombre}`,
+            req.ip
+          ]
+        );
+      } else if (correoNormalizado) {
+        console.log(`⏭ Correo omitido (duplicado por destinatario) a ${correoNormalizado} para documento ${documento.id}`);
+      }
     }
 
     // Registrar subida en auditoría
@@ -290,8 +307,8 @@ export async function subirDocumento(req, res) {
  */
 export async function obtenerMisDocumentos(req, res) {
   try {
-    // Verificar si el usuario es diego.castillo@fastprobags.com (puede ver todos los documentos)
-    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    // Verificar si el usuario es administrador (puede ver todos los documentos)
+    const esAdmin = esAdminDesdeRequest(req.user);
     
     // Obtener solo la versión más reciente de cada documento
     // Agrupamos por documento_padre_id (si existe) o por id (si es documento raíz)
@@ -514,8 +531,8 @@ export async function descargarDocumento(req, res) {
     const correoUsuario = req.user.correo || null;
     const usuarioId = req.user.id;
 
-    // Verificar si el usuario es diego.castillo@fastprobags.com (puede ver todos los documentos)
-    const esAdmin = req.user.correo && req.user.correo.toLowerCase().trim() === 'diego.castillo@fastprobags.com';
+    // Verificar si el usuario es administrador (puede ver todos los documentos)
+    const esAdmin = esAdminDesdeRequest(req.user);
 
     // Verificar que el usuario tenga permiso para descargar
     let tienePermiso = false;
@@ -884,6 +901,9 @@ export async function subirNuevaVersion(req, res) {
     }
 
     // Insertar aprobadores para el nuevo documento
+    // Usar un Map para agrupar por correo y evitar duplicados
+    const correosEnviadosNuevaVersion = new Map();
+    
     for (let i = 0; i < aprobadoresData.length; i++) {
       const aprobador = aprobadoresData[i];
       const tokenFirma = crypto.randomBytes(32).toString('hex');
@@ -918,13 +938,14 @@ export async function subirNuevaVersion(req, res) {
         throw new Error(`ID de miembro de grupo inválido para el aprobador "${aprobador.nombre || aprobador.usuario_nombre}"`);
       }
 
-      await client.query(
+      const aprobadorResult = await client.query(
         `INSERT INTO aprobadores (
           documento_id, usuario_id, usuario_nombre, usuario_correo,
           rol_aprobacion, orden_aprobacion, token_firma, estado,
           posicion_x, posicion_y, pagina_firma, ancho_firma, alto_firma,
           correo_grupo, grupo_miembro_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id`,
         [
           nuevoDocumento.id,
           usuarioId,
@@ -944,31 +965,43 @@ export async function subirNuevaVersion(req, res) {
         ]
       );
 
-      // Enviar correo de notificación de nueva versión a TODOS los aprobadores
-      await enviarNotificacionNuevaVersion(
-        usuarioCorreo,
-        usuarioNombre,
-        nombreArchivoNormalizado,
-        tokenFirma,
-        nuevoDocumento.version
-      );
+      const aprobadorId = aprobadorResult.rows[0].id;
+      const correoNormalizado = (usuarioCorreo || '').toLowerCase().trim();
 
-      // Registrar envío de correo en auditoría
-      await client.query(
-        `INSERT INTO log_auditoria (
-          documento_id, usuario_id, usuario_nombre, usuario_correo,
-          accion, descripcion, ip_address
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          nuevoDocumento.id,
-          usuarioId,
-          usuarioNombre,
+      // Solo enviar correo si no se ha enviado ya a este destinatario
+      if (correoNormalizado && !correosEnviadosNuevaVersion.has(correoNormalizado)) {
+        correosEnviadosNuevaVersion.set(correoNormalizado, true);
+        
+        // Enviar correo de notificación de nueva versión con IDs para deduplicación
+        await enviarNotificacionNuevaVersion(
           usuarioCorreo,
-          'notificacion',
-          `Correo de nueva versión enviado a ${usuarioNombre}`,
-          req.ip
-        ]
-      );
+          usuarioNombre,
+          nombreArchivoNormalizado,
+          tokenFirma,
+          nuevoDocumento.version,
+          nuevoDocumento.id,
+          aprobadorId
+        );
+
+        // Registrar envío de correo en auditoría
+        await client.query(
+          `INSERT INTO log_auditoria (
+            documento_id, usuario_id, usuario_nombre, usuario_correo,
+            accion, descripcion, ip_address
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            nuevoDocumento.id,
+            usuarioId,
+            usuarioNombre,
+            usuarioCorreo,
+            'notificacion',
+            `Correo de nueva versión enviado a ${usuarioNombre}`,
+            req.ip
+          ]
+        );
+      } else if (correoNormalizado) {
+        console.log(`⏭ Correo de nueva versión omitido (duplicado por destinatario) a ${correoNormalizado} para documento ${nuevoDocumento.id}`);
+      }
     }
 
     // Actualizar último recordatorio para evitar que el job de recordatorios envíe correos inmediatamente
@@ -1685,25 +1718,38 @@ export async function reenviarDocumento(req, res) {
     
     // Obtener aprobadores pendientes para enviar notificaciones
     const aprobadoresResult = await client.query(
-      `SELECT usuario_nombre, usuario_correo, token_firma, rol_aprobacion
+      `SELECT id, usuario_nombre, usuario_correo, token_firma, rol_aprobacion
        FROM aprobadores
        WHERE documento_id = $1 AND estado = 'pendiente'`,
       [id]
     );
     
-    // Enviar notificaciones a los aprobadores
+    // Enviar notificaciones a los aprobadores (agrupar por correo para evitar duplicados)
     const { enviarNotificacionAprobacion } = await import('../utils/mailer.js');
+    const correosEnviadosReenvio = new Set();
+    
     for (const aprobador of aprobadoresResult.rows) {
-      try {
-        await enviarNotificacionAprobacion(
-          aprobador.usuario_correo,
-          aprobador.usuario_nombre,
-          documento.nombre_archivo,
-          aprobador.token_firma,
-          documento.usuario_creador_nombre || documento.usuario_creador_correo
-        );
-      } catch (error) {
-        console.error(`Error al enviar notificación a ${aprobador.usuario_correo}:`, error);
+      const correoNormalizado = (aprobador.usuario_correo || '').toLowerCase().trim();
+      
+      // Solo enviar si no se ha enviado ya a este correo
+      if (correoNormalizado && !correosEnviadosReenvio.has(correoNormalizado)) {
+        correosEnviadosReenvio.add(correoNormalizado);
+        
+        try {
+          await enviarNotificacionAprobacion(
+            aprobador.usuario_correo,
+            aprobador.usuario_nombre,
+            documento.nombre_archivo,
+            aprobador.token_firma,
+            documento.usuario_creador_nombre || documento.usuario_creador_correo,
+            id,
+            aprobador.id
+          );
+        } catch (error) {
+          console.error(`Error al enviar notificación a ${aprobador.usuario_correo}:`, error);
+        }
+      } else if (correoNormalizado) {
+        console.log(`⏭ Correo de reenvío omitido (duplicado) a ${correoNormalizado} para documento ${id}`);
       }
     }
     

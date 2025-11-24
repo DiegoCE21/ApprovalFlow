@@ -9,6 +9,7 @@ import { ArrowBack, CheckCircle, Delete, ZoomIn, ZoomOut, Save } from '@mui/icon
 import { Document, Page, pdfjs } from 'react-pdf';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
+import { esAdminDesdeUser } from '../utils/adminHelper.js';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -40,8 +41,8 @@ const EditarPosicionesFirmas = () => {
       const userObj = JSON.parse(userData);
       setUser(userObj);
       
-      // Verificar que el usuario es diego.castillo@fastprobags.com
-      if (userObj.correo !== 'diego.castillo@fastprobags.com') {
+      // Verificar que el usuario es administrador
+      if (!esAdminDesdeUser(userObj)) {
         toast.error('No tienes permiso para editar posiciones de firmas');
         navigate(`/documento/${id}`);
         return;

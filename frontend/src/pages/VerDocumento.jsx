@@ -11,6 +11,7 @@ import { ArrowBack, Download, CheckCircle, Cancel, PendingActions, CloudUpload, 
 import { Document, Page, pdfjs } from 'react-pdf';
 import { toast } from 'react-toastify';
 import api from '../config/axios';
+import { esAdminDesdeUser } from '../utils/adminHelper.js';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -168,7 +169,7 @@ const VerDocumento = () => {
 
   const puedeEditarEliminar = () => {
     if (!user || !documento) return false;
-    const esAdmin = user.correo === 'diego.castillo@fastprobags.com';
+    const esAdmin = esAdminDesdeUser(user);
     const esCreador = documento.usuario_creador_id === user.id;
     return esAdmin || esCreador;
   };
@@ -312,7 +313,7 @@ const VerDocumento = () => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1, ml: 2 }}>
             Detalles del Documento
           </Typography>
-          {user?.correo === 'diego.castillo@fastprobags.com' && (
+          {esAdminDesdeUser(user) && (
             <Button 
               color="inherit" 
               startIcon={<Edit />} 

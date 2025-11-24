@@ -21,8 +21,12 @@ export function verificarPermisoSubida(req, res, next) {
   next();
 }
 
+import { esAdministrador } from '../utils/adminHelper.js';
+
 /**
- * Middleware que verifica si el usuario es Diego Castillo (administrador de permisos)
+ * Middleware que verifica si el usuario es administrador de permisos
+ * Por ahora solo diego.castillo@fastprobags.com puede gestionar permisos
+ * (puede extenderse a otros administradores si es necesario)
  */
 export function verificarEsAdminPermisos(req, res, next) {
   if (!req.user) {
@@ -33,7 +37,8 @@ export function verificarEsAdminPermisos(req, res, next) {
   }
 
   // Solo diego.castillo@fastprobags.com puede gestionar permisos
-  if (req.user.correo !== 'diego.castillo@fastprobags.com') {
+  // (puede cambiarse para incluir otros administradores si es necesario)
+  if (req.user.correo?.toLowerCase().trim() !== 'diego.castillo@fastprobags.com') {
     return res.status(403).json({
       success: false,
       message: 'Solo el administrador puede gestionar permisos'
