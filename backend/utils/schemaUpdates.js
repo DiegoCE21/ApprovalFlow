@@ -136,7 +136,7 @@ export async function ensureSchemaUpdates() {
         documento_id INTEGER REFERENCES documentos(id) ON DELETE CASCADE,
         aprobador_id INTEGER REFERENCES aprobadores(id) ON DELETE CASCADE,
         tipo_correo VARCHAR(50) NOT NULL, -- 'aprobacion', 'nueva_version', 'rechazo', 'aprobacion_completa', 'recordatorio'
-        token_firma VARCHAR(255),
+        token_firma VARCHAR(255) DEFAULT '',
         enviado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -149,18 +149,49 @@ export async function ensureSchemaUpdates() {
       // Ignorar error si la restricción no existe
     });
 
-    // Crear índice único usando COALESCE para manejar NULLs correctamente
-    // Esto evita duplicados basándose en destinatario, documento, tipo y token
+    // Actualizar columna token_firma para que use '' por defecto en lugar de NULL
+    await pool.query(`
+      UPDATE correos_enviados
+      SET token_firma = ''
+      WHERE token_firma IS NULL;
+    `).catch(() => {
+      // Ignorar si la tabla está vacía o no existe
+    });
+
+    await pool.query(`
+      ALTER TABLE correos_enviados
+      ALTER COLUMN token_firma SET DEFAULT '';
+    `).catch(() => {
+      // Ignorar error si ya tiene default
+    });
+
+    // Eliminar índice único antiguo si existe
     await pool.query(`
       DROP INDEX IF EXISTS idx_correos_enviados_unique;
     `).catch(() => {
       // Ignorar error si el índice no existe
     });
 
+    // Crear restricción única simple (ahora que token_firma nunca es NULL)
     await pool.query(`
-      CREATE UNIQUE INDEX idx_correos_enviados_unique
-      ON correos_enviados (destinatario, documento_id, tipo_correo, COALESCE(token_firma, ''));
-    `);
+      ALTER TABLE correos_enviados
+      DROP CONSTRAINT IF EXISTS idx_correos_enviados_unique;
+    `).catch(() => {
+      // Ignorar error si la restricción no existe
+    });
+
+    await pool.query(`
+      ALTER TABLE correos_enviados
+      ADD CONSTRAINT idx_correos_enviados_unique 
+      UNIQUE (destinatario, documento_id, tipo_correo, token_firma);
+    `).catch((error) => {
+      // Si falla, intentar crear como índice único
+      console.warn('No se pudo crear restricción única, creando índice único:', error.message);
+      pool.query(`
+        CREATE UNIQUE INDEX idx_correos_enviados_unique
+        ON correos_enviados (destinatario, documento_id, tipo_correo, token_firma);
+      `).catch(() => {});
+    });
 
     // Crear índice para búsquedas rápidas
     await pool.query(`

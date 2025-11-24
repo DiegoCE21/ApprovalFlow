@@ -41,17 +41,19 @@ async function verificarYRegistrarCorreo(destinatario, documentoId, tipoCorreo, 
     const intervaloMinutos = tipoCorreo === 'recordatorio' ? 1 : 5;
 
     // Verificar si ya se envió un correo similar recientemente
+    // Normalizamos token_firma a '' si es null para que coincida con la base de datos
+    const tokenFirmaNormalizado = tokenFirma || '';
     const resultado = await pool.query(`
       SELECT id, enviado_en
       FROM correos_enviados
       WHERE destinatario = $1
         AND documento_id = $2
         AND tipo_correo = $3
-        AND (token_firma = $4 OR ($4 IS NULL AND token_firma IS NULL))
+        AND token_firma = $4
         AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '${intervaloMinutos} minutes'
       ORDER BY enviado_en DESC
       LIMIT 1
-    `, [correoNormalizado, documentoId, tipoCorreo, tokenFirma]);
+    `, [correoNormalizado, documentoId, tipoCorreo, tokenFirmaNormalizado]);
 
     if (resultado.rows.length > 0) {
       const tiempoTranscurrido = new Date() - new Date(resultado.rows[0].enviado_en);
@@ -61,20 +63,39 @@ async function verificarYRegistrarCorreo(destinatario, documentoId, tipoCorreo, 
     }
 
     // Registrar el correo antes de enviarlo (usando INSERT ... ON CONFLICT para evitar race conditions)
+    // Normalizamos token_firma a string vacío si es null
     try {
-      await pool.query(`
+      const tokenFirmaNormalizado = tokenFirma || '';
+      const insertResult = await pool.query(`
         INSERT INTO correos_enviados (destinatario, documento_id, aprobador_id, tipo_correo, token_firma)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (destinatario, documento_id, tipo_correo, token_firma) DO NOTHING
-      `, [correoNormalizado, documentoId, aprobadorId, tipoCorreo, tokenFirma]);
+        RETURNING id
+      `, [correoNormalizado, documentoId, aprobadorId, tipoCorreo, tokenFirmaNormalizado]);
+      
+      if (insertResult.rows.length > 0) {
+        console.log(`✓ Correo registrado en tabla de tracking: ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+      } else {
+        // El correo ya estaba registrado (ON CONFLICT activado)
+        console.log(`⚠ Correo ya registrado (conflicto) para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+        return { yaEnviado: true, puedeEnviar: false };
+      }
     } catch (error) {
-      // Si hay un error al registrar (puede ser que otro proceso ya lo registró), verificar nuevamente
+      // Si hay un error al registrar, loguear y verificar
+      console.error('Error al registrar correo en tabla:', error);
+      console.error('Detalles del error:', {
+        code: error.code,
+        message: error.message,
+        constraint: error.constraint
+      });
+      
+      // Si es un error de restricción única, el correo ya existe
       if (error.code === '23505') { // Unique violation
-        console.log(`⚠ Correo ya registrado para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+        console.log(`⚠ Correo ya registrado (error único) para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
         return { yaEnviado: true, puedeEnviar: false };
       }
       // Si es otro error, continuar con el envío pero loguear
-      console.warn('Advertencia al registrar correo:', error.message);
+      console.warn('Advertencia: continuando con envío a pesar del error de registro');
     }
 
     return { yaEnviado: false, puedeEnviar: true };
