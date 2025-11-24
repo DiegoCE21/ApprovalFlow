@@ -37,77 +37,82 @@ async function verificarYRegistrarCorreo(destinatario, documentoId, tipoCorreo, 
     // Normalizar correo
     const correoNormalizado = destinatario.toLowerCase().trim();
 
-    // Para recordatorios, usar un intervalo más corto (1 minuto) para permitir recordatorios periódicos
-    // Para envíos iniciales, usar un intervalo muy corto (10 segundos) para evitar duplicados por doble clic
-    const intervaloMinutos = tipoCorreo === 'recordatorio' ? 1 : (tipoCorreo === 'aprobacion' ? 0.17 : 5); // 0.17 minutos = 10 segundos
-
-    // Verificar si ya se envió un correo al mismo destinatario para el mismo documento y tipo
-    // Para envíos iniciales, ignoramos el token para detectar duplicados por doble clic
-    // Para recordatorios, sí consideramos el token porque cada recordatorio es legítimo
-    const tokenFirmaNormalizado = tokenFirma || '';
-    
-    let resultado;
+    // Para recordatorios, necesitamos permitir envíos periódicos
+    // Usamos un token único basado en el tiempo (redondeado a minutos) para permitir recordatorios cada X minutos
+    let tokenFirmaParaRegistro;
     if (tipoCorreo === 'aprobacion') {
-      // Para envíos iniciales: verificar por destinatario, documento y tipo (ignorar token)
-      // Esto previene duplicados por doble clic o envíos múltiples
-      resultado = await pool.query(`
-        SELECT id, enviado_en
-        FROM correos_enviados
-        WHERE destinatario = $1
-          AND documento_id = $2
-          AND tipo_correo = $3
-          AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '10 seconds'
-        ORDER BY enviado_en DESC
-        LIMIT 1
-      `, [correoNormalizado, documentoId, tipoCorreo]);
+      // Para envíos iniciales, usar token vacío para que la restricción única funcione correctamente
+      tokenFirmaParaRegistro = '';
+    } else if (tipoCorreo === 'recordatorio') {
+      // Para recordatorios, usar un token basado en el tiempo (redondeado a minutos)
+      // Esto permite enviar recordatorios periódicos sin bloquearlos
+      const ahora = new Date();
+      const minutosDesdeEpoch = Math.floor(ahora.getTime() / (1000 * 60));
+      tokenFirmaParaRegistro = `recordatorio_${minutosDesdeEpoch}`;
     } else {
-      // Para recordatorios y otros: verificar incluyendo el token
-      resultado = await pool.query(`
-        SELECT id, enviado_en
-        FROM correos_enviados
-        WHERE destinatario = $1
-          AND documento_id = $2
-          AND tipo_correo = $3
-          AND token_firma = $4
-          AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '${intervaloMinutos} minutes'
-        ORDER BY enviado_en DESC
-        LIMIT 1
-      `, [correoNormalizado, documentoId, tipoCorreo, tokenFirmaNormalizado]);
+      // Para otros tipos, usar el token real
+      tokenFirmaParaRegistro = tokenFirma || '';
     }
 
-    if (resultado.rows.length > 0) {
-      const tiempoTranscurrido = new Date() - new Date(resultado.rows[0].enviado_en);
-      const segundosTranscurridos = Math.floor(tiempoTranscurrido / 1000);
-      if (tipoCorreo === 'aprobacion') {
-        console.log(`⚠ Correo ya enviado a ${correoNormalizado} hace ${segundosTranscurridos} segundos (${tipoCorreo}, documento ${documentoId}) - duplicado detectado`);
-      } else {
-        const minutosTranscurridos = Math.floor(tiempoTranscurrido / 60000);
-        console.log(`⚠ Correo ya enviado a ${correoNormalizado} hace ${minutosTranscurridos} minutos (${tipoCorreo}, documento ${documentoId})`);
-      }
-      return { yaEnviado: true, puedeEnviar: false };
-    }
+    // ESTRATEGIA: Para recordatorios, el token único basado en minutos ya previene duplicados
+    // El job de recordatorios ya verifica el intervalo correcto (intervalo_recordatorio_minutos)
+    // Solo necesitamos prevenir duplicados dentro del mismo minuto usando el token único
 
-    // Registrar el correo antes de enviarlo (usando INSERT ... ON CONFLICT para evitar race conditions)
-    // Para envíos iniciales, usamos token vacío para que la restricción única funcione correctamente
-    // y prevenga duplicados por doble clic (todos los envíos iniciales al mismo destinatario tendrán el mismo token vacío)
+    // ESTRATEGIA: Registrar PRIMERO de forma atómica, luego verificar
+    // Esto previene condiciones de carrera donde dos peticiones pasan la verificación simultáneamente
     try {
-      // Para envíos iniciales, usar token vacío para que la restricción única funcione
-      // Para recordatorios y otros, usar el token real
-      const tokenFirmaParaRegistro = (tipoCorreo === 'aprobacion') ? '' : (tokenFirma || '');
+      // Intentar registrar el correo primero (INSERT con ON CONFLICT)
+      // Si ya existe, ON CONFLICT retornará 0 filas
       const insertResult = await pool.query(`
         INSERT INTO correos_enviados (destinatario, documento_id, aprobador_id, tipo_correo, token_firma)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (destinatario, documento_id, tipo_correo, token_firma) DO NOTHING
-        RETURNING id
+        RETURNING id, enviado_en
       `, [correoNormalizado, documentoId, aprobadorId, tipoCorreo, tokenFirmaParaRegistro]);
       
-      if (insertResult.rows.length > 0) {
-        console.log(`✓ Correo registrado en tabla de tracking: ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
-      } else {
+      if (insertResult.rows.length === 0) {
         // El correo ya estaba registrado (ON CONFLICT activado)
-        console.log(`⚠ Correo ya registrado (conflicto) para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+        // Para recordatorios, esto es normal si se intenta enviar en el mismo minuto
+        if (tipoCorreo === 'recordatorio') {
+          console.log(`⚠ Recordatorio ya registrado en este minuto para ${correoNormalizado} (documento ${documentoId})`);
+        } else {
+          console.log(`⚠ Correo ya registrado (conflicto) para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+        }
         return { yaEnviado: true, puedeEnviar: false };
       }
+
+      // Registro exitoso - ahora verificar si es demasiado reciente (para envíos iniciales)
+      const registroReciente = insertResult.rows[0];
+      const tiempoTranscurrido = new Date() - new Date(registroReciente.enviado_en);
+      const segundosTranscurridos = Math.floor(tiempoTranscurrido / 1000);
+
+      // Para envíos iniciales, verificar si se registró hace menos de 10 segundos
+      // Si es así, podría ser un duplicado por doble clic
+      if (tipoCorreo === 'aprobacion' && segundosTranscurridos < 10) {
+        // Verificar si hay otro registro más antiguo (de otra petición que llegó primero)
+        const verificacionDuplicado = await pool.query(`
+          SELECT id, enviado_en
+          FROM correos_enviados
+          WHERE destinatario = $1
+            AND documento_id = $2
+            AND tipo_correo = $3
+            AND token_firma = $4
+            AND id != $5
+            AND enviado_en < $6
+          ORDER BY enviado_en ASC
+          LIMIT 1
+        `, [correoNormalizado, documentoId, tipoCorreo, tokenFirmaParaRegistro, registroReciente.id, registroReciente.enviado_en]);
+
+        if (verificacionDuplicado.rows.length > 0) {
+          // Hay un registro más antiguo, este es un duplicado
+          console.log(`⚠ Correo duplicado detectado para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId}) - ya existe registro más antiguo`);
+          return { yaEnviado: true, puedeEnviar: false };
+        }
+      }
+
+      console.log(`✓ Correo registrado en tabla de tracking: ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
+      return { yaEnviado: false, puedeEnviar: true };
+
     } catch (error) {
       // Si hay un error al registrar, loguear y verificar
       console.error('Error al registrar correo en tabla:', error);
@@ -122,15 +127,14 @@ async function verificarYRegistrarCorreo(destinatario, documentoId, tipoCorreo, 
         console.log(`⚠ Correo ya registrado (error único) para ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
         return { yaEnviado: true, puedeEnviar: false };
       }
-      // Si es otro error, continuar con el envío pero loguear
-      console.warn('Advertencia: continuando con envío a pesar del error de registro');
+      // Si es otro error, NO permitir el envío para evitar duplicados
+      console.warn('Error al registrar correo - NO se enviará para evitar duplicados');
+      return { yaEnviado: true, puedeEnviar: false };
     }
-
-    return { yaEnviado: false, puedeEnviar: true };
   } catch (error) {
     console.error('Error al verificar correo enviado:', error);
-    // En caso de error, permitir el envío para no bloquear el sistema
-    return { yaEnviado: false, puedeEnviar: true };
+    // En caso de error, NO permitir el envío para evitar duplicados
+    return { yaEnviado: true, puedeEnviar: false };
   }
 }
 
