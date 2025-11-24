@@ -38,40 +38,68 @@ async function verificarYRegistrarCorreo(destinatario, documentoId, tipoCorreo, 
     const correoNormalizado = destinatario.toLowerCase().trim();
 
     // Para recordatorios, usar un intervalo más corto (1 minuto) para permitir recordatorios periódicos
-    const intervaloMinutos = tipoCorreo === 'recordatorio' ? 1 : 5;
+    // Para envíos iniciales, usar un intervalo muy corto (10 segundos) para evitar duplicados por doble clic
+    const intervaloMinutos = tipoCorreo === 'recordatorio' ? 1 : (tipoCorreo === 'aprobacion' ? 0.17 : 5); // 0.17 minutos = 10 segundos
 
-    // Verificar si ya se envió un correo similar recientemente
-    // Normalizamos token_firma a '' si es null para que coincida con la base de datos
+    // Verificar si ya se envió un correo al mismo destinatario para el mismo documento y tipo
+    // Para envíos iniciales, ignoramos el token para detectar duplicados por doble clic
+    // Para recordatorios, sí consideramos el token porque cada recordatorio es legítimo
     const tokenFirmaNormalizado = tokenFirma || '';
-    const resultado = await pool.query(`
-      SELECT id, enviado_en
-      FROM correos_enviados
-      WHERE destinatario = $1
-        AND documento_id = $2
-        AND tipo_correo = $3
-        AND token_firma = $4
-        AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '${intervaloMinutos} minutes'
-      ORDER BY enviado_en DESC
-      LIMIT 1
-    `, [correoNormalizado, documentoId, tipoCorreo, tokenFirmaNormalizado]);
+    
+    let resultado;
+    if (tipoCorreo === 'aprobacion') {
+      // Para envíos iniciales: verificar por destinatario, documento y tipo (ignorar token)
+      // Esto previene duplicados por doble clic o envíos múltiples
+      resultado = await pool.query(`
+        SELECT id, enviado_en
+        FROM correos_enviados
+        WHERE destinatario = $1
+          AND documento_id = $2
+          AND tipo_correo = $3
+          AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '10 seconds'
+        ORDER BY enviado_en DESC
+        LIMIT 1
+      `, [correoNormalizado, documentoId, tipoCorreo]);
+    } else {
+      // Para recordatorios y otros: verificar incluyendo el token
+      resultado = await pool.query(`
+        SELECT id, enviado_en
+        FROM correos_enviados
+        WHERE destinatario = $1
+          AND documento_id = $2
+          AND tipo_correo = $3
+          AND token_firma = $4
+          AND enviado_en > CURRENT_TIMESTAMP - INTERVAL '${intervaloMinutos} minutes'
+        ORDER BY enviado_en DESC
+        LIMIT 1
+      `, [correoNormalizado, documentoId, tipoCorreo, tokenFirmaNormalizado]);
+    }
 
     if (resultado.rows.length > 0) {
       const tiempoTranscurrido = new Date() - new Date(resultado.rows[0].enviado_en);
-      const minutosTranscurridos = Math.floor(tiempoTranscurrido / 60000);
-      console.log(`⚠ Correo ya enviado a ${correoNormalizado} hace ${minutosTranscurridos} minutos (${tipoCorreo}, documento ${documentoId})`);
+      const segundosTranscurridos = Math.floor(tiempoTranscurrido / 1000);
+      if (tipoCorreo === 'aprobacion') {
+        console.log(`⚠ Correo ya enviado a ${correoNormalizado} hace ${segundosTranscurridos} segundos (${tipoCorreo}, documento ${documentoId}) - duplicado detectado`);
+      } else {
+        const minutosTranscurridos = Math.floor(tiempoTranscurrido / 60000);
+        console.log(`⚠ Correo ya enviado a ${correoNormalizado} hace ${minutosTranscurridos} minutos (${tipoCorreo}, documento ${documentoId})`);
+      }
       return { yaEnviado: true, puedeEnviar: false };
     }
 
     // Registrar el correo antes de enviarlo (usando INSERT ... ON CONFLICT para evitar race conditions)
-    // Normalizamos token_firma a string vacío si es null
+    // Para envíos iniciales, usamos token vacío para que la restricción única funcione correctamente
+    // y prevenga duplicados por doble clic (todos los envíos iniciales al mismo destinatario tendrán el mismo token vacío)
     try {
-      const tokenFirmaNormalizado = tokenFirma || '';
+      // Para envíos iniciales, usar token vacío para que la restricción única funcione
+      // Para recordatorios y otros, usar el token real
+      const tokenFirmaParaRegistro = (tipoCorreo === 'aprobacion') ? '' : (tokenFirma || '');
       const insertResult = await pool.query(`
         INSERT INTO correos_enviados (destinatario, documento_id, aprobador_id, tipo_correo, token_firma)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (destinatario, documento_id, tipo_correo, token_firma) DO NOTHING
         RETURNING id
-      `, [correoNormalizado, documentoId, aprobadorId, tipoCorreo, tokenFirmaNormalizado]);
+      `, [correoNormalizado, documentoId, aprobadorId, tipoCorreo, tokenFirmaParaRegistro]);
       
       if (insertResult.rows.length > 0) {
         console.log(`✓ Correo registrado en tabla de tracking: ${correoNormalizado} (${tipoCorreo}, documento ${documentoId})`);
